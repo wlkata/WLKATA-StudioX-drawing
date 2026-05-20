@@ -19,7 +19,7 @@
 
   // ---- State -------------------------------------------------------------
 
-  var paths       = [];    // Array of arrays of {x, y} normalised (0-1)
+  var paths       = [];    // Array of arrays of {gx, gy} grid indices
   var currentPath = null;
   var isDrawing   = false;
 
@@ -69,46 +69,70 @@
   window.addEventListener('resize', resizeCanvas);
   setTimeout(resizeCanvas, 0);
 
+  // ---- Grid helpers -------------------------------------------------------
+  // All grid math uses a single square cell size (cellW = canvasWidth / res)
+  // for both axes so rendering and snapping always agree.
+
+  function gridInfo() {
+    var res  = parseInt(resInput.value) || 50;
+    var w    = canvas.width;
+    var h    = canvas.height;
+    var cell = w / res;                         // square cell in px
+    var maxGx = res;                            // grid columns
+    var maxGy = Math.floor(h / cell);           // grid rows (full cells only)
+    return { res: res, cell: cell, maxGx: maxGx, maxGy: maxGy,
+             boxW: maxGx * cell, boxH: maxGy * cell };
+  }
+
   // ---- Canvas rendering --------------------------------------------------
 
   function renderCanvas() {
     var w = canvas.width;
     var h = canvas.height;
     if (w === 0 || h === 0) return;
+    var gi = gridInfo();
 
     // Background
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, w, h);
 
-    // Grid — use resolution to show pixel density
-    var res = parseInt(resInput.value) || 50;
-    var cellW = w / res;
-    // Show every line when resolution <= 100, otherwise every 5th
-    var step = res > 100 ? 5 : 1;
+    // Grey out area below the bounding box (outside drawable region)
+    if (gi.boxH < h) {
+      ctx.fillStyle = 'rgba(0,0,0,0.04)';
+      ctx.fillRect(0, gi.boxH, w, h - gi.boxH);
+    }
 
+    // Grid lines (inside bounding box only)
+    var step = gi.res > 100 ? 5 : 1;
     ctx.strokeStyle = 'rgba(0,0,0,0.06)';
     ctx.lineWidth   = 0.5;
-    for (var gx = 0; gx <= res; gx += step) {
-      var px = Math.round(gx * cellW) + 0.5;
+    for (var gx = 0; gx <= gi.maxGx; gx += step) {
+      var px = Math.round(gx * gi.cell) + 0.5;
       ctx.beginPath();
       ctx.moveTo(px, 0);
-      ctx.lineTo(px, h);
+      ctx.lineTo(px, gi.boxH);
       ctx.stroke();
     }
-    var vCells = Math.ceil(h / cellW);
-    for (var gy = 0; gy <= vCells; gy += step) {
-      var py = Math.round(gy * cellW) + 0.5;
+    for (var gy = 0; gy <= gi.maxGy; gy += step) {
+      var py = Math.round(gy * gi.cell) + 0.5;
       ctx.beginPath();
       ctx.moveTo(0, py);
-      ctx.lineTo(w, py);
+      ctx.lineTo(gi.boxW, py);
       ctx.stroke();
     }
+
+    // Bounding box — shows the calibration region (TL ↔ BR)
+    ctx.strokeStyle = 'rgba(33,150,243,0.5)';
+    ctx.lineWidth   = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(1, 1, gi.boxW - 2, gi.boxH - 2);
+    ctx.setLineDash([]);
 
     // Collect all paths (including the one being drawn)
     var allPaths = paths.slice();
     if (currentPath && currentPath.length > 0) allPaths.push(currentPath);
 
-    // Draw paths
+    // Draw paths — convert stored {gx, gy} grid indices to pixels
     ctx.strokeStyle = '#333';
     ctx.lineWidth   = 2;
     ctx.lineCap     = 'round';
@@ -119,18 +143,17 @@
       if (p.length === 0) continue;
 
       if (p.length === 1) {
-        // Single dot
         ctx.fillStyle = '#333';
         ctx.beginPath();
-        ctx.arc(p[0].x * w, p[0].y * h, 2, 0, Math.PI * 2);
+        ctx.arc(p[0].gx * gi.cell, p[0].gy * gi.cell, 2, 0, Math.PI * 2);
         ctx.fill();
         continue;
       }
 
       ctx.beginPath();
-      ctx.moveTo(p[0].x * w, p[0].y * h);
+      ctx.moveTo(p[0].gx * gi.cell, p[0].gy * gi.cell);
       for (var j = 1; j < p.length; j++) {
-        ctx.lineTo(p[j].x * w, p[j].y * h);
+        ctx.lineTo(p[j].gx * gi.cell, p[j].gy * gi.cell);
       }
       ctx.stroke();
     }
@@ -140,21 +163,18 @@
 
   // ---- Canvas mouse handling ---------------------------------------------
 
-  /** Snap a raw normalised coordinate to the nearest grid corner (intersection). */
-  function snapToGrid(rawX, rawY) {
-    var res  = parseInt(resInput.value) || 50;
-    var vRes = Math.max(1, Math.round(res * canvas.height / canvas.width));
+  /** Snap raw pixel coords to the nearest grid corner, return {gx, gy}. */
+  function snapToGrid(rawPxX, rawPxY) {
+    var gi = gridInfo();
     return {
-      x: Math.round(rawX * res)  / res,
-      y: Math.round(rawY * vRes) / vRes
+      gx: Math.min(gi.maxGx, Math.max(0, Math.round(rawPxX / gi.cell))),
+      gy: Math.min(gi.maxGy, Math.max(0, Math.round(rawPxY / gi.cell)))
     };
   }
 
   function canvasPos(e) {
     var rect = canvas.getBoundingClientRect();
-    var rawX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    var rawY = Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height));
-    return snapToGrid(rawX, rawY);
+    return snapToGrid(e.clientX - rect.left, e.clientY - rect.top);
   }
 
   canvas.addEventListener('mousedown', function (e) {
@@ -166,20 +186,21 @@
 
   canvas.addEventListener('mousemove', function (e) {
     if (!isDrawing || !currentPath) return;
+    var gi   = gridInfo();
     var rect = canvas.getBoundingClientRect();
-    var rawX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    var rawY = Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height));
+    var rawPxX = e.clientX - rect.left;
+    var rawPxY = e.clientY - rect.top;
     var last = currentPath[currentPath.length - 1];
-    var res  = parseInt(resInput.value) || 50;
-    var cellSize = 1.0 / res;
-    var dx = rawX - last.x;
-    var dy = rawY - last.y;
-    // Only snap & record once the mouse has moved at least 0.7 of a cell away
-    // from the last recorded point — this prevents adjacent-axis triggers
-    // when trying to draw diagonally.
-    if (Math.sqrt(dx * dx + dy * dy) < cellSize * 0.7) return;
-    var pos = snapToGrid(rawX, rawY);
-    if (pos.x === last.x && pos.y === last.y) return;
+    // Distance from last point in grid-cell units
+    var dxCells = rawPxX / gi.cell - last.gx;
+    var dyCells = rawPxY / gi.cell - last.gy;
+    var distCells = Math.sqrt(dxCells * dxCells + dyCells * dyCells);
+    // Wait until mouse is ≥ 0.9 cells from the last point.
+    // At 0.9, a 45° movement is at (0.64, 0.64) → rounds to (1,1) diagonal.
+    // Shallower angles (< ~34°) correctly round to the adjacent-axis cell.
+    if (distCells < 0.9) return;
+    var pos = snapToGrid(rawPxX, rawPxY);
+    if (pos.gx === last.gx && pos.gy === last.gy) return;
     currentPath.push(pos);
     renderCanvas();
   });
@@ -290,13 +311,15 @@
   updateUI();
 
   // ---- Coordinate transform ----------------------------------------------
-  // TL=(0,0)  TR=(1,0)  BR=(1,1)
+  // TL=(0,0)  TR=(maxGx,0)  BR=(maxGx,maxGy)
   // BL = TL + BR − TR   (parallelogram)
-  // P(u,v) = TL + u*(TR−TL) + v*(BL−TL)
+  // P(u,v) = TL + u*(TR−TL) + v*(BL−TL)   where u,v ∈ [0,1]
 
-  function canvasToRobot(u, v) {
+  function canvasToRobot(gx, gy) {
+    var gi = gridInfo();
+    var u  = gx / gi.maxGx;
+    var v  = gi.maxGy > 0 ? gy / gi.maxGy : 0;
     var tl = calib.tl, tr = calib.tr, br = calib.br;
-    // BL derived from parallelogram
     var blx = tl.x + br.x - tr.x;
     var bly = tl.y + br.y - tr.y;
     var blz = tl.z + br.z - tr.z;
@@ -308,32 +331,27 @@
   }
 
   // ---- Path interpolation ------------------------------------------------
-  // Resample a path so consecutive points are at most 1 pixel apart,
-  // snapping every interpolated point to a grid center and deduplicating.
+  // Resample a path so consecutive points are at most 1 grid cell apart,
+  // snapping every interpolated point to a grid corner and deduplicating.
 
-  function interpolatePath(path, resolution) {
+  function interpolatePath(path) {
     if (path.length <= 1) return path.slice();
-    var stepSize = 1.0 / resolution;
-    var vRes = Math.max(1, Math.round(resolution * canvas.height / canvas.width));
-    var raw = [path[0]];
+    var gi = gridInfo();
+    var result = [path[0]];
     for (var i = 1; i < path.length; i++) {
       var prev = path[i - 1], curr = path[i];
-      var dx   = curr.x - prev.x;
-      var dy   = curr.y - prev.y;
-      var dist = Math.sqrt(dx * dx + dy * dy);
-      var steps = Math.max(1, Math.ceil(dist / stepSize));
+      var dgx  = curr.gx - prev.gx;
+      var dgy  = curr.gy - prev.gy;
+      var dist = Math.sqrt(dgx * dgx + dgy * dgy);
+      var steps = Math.max(1, Math.ceil(dist));  // 1 grid cell per step
       for (var s = 1; s <= steps; s++) {
-        var t = s / steps;
-        raw.push({ x: prev.x + dx * t, y: prev.y + dy * t });
-      }
-    }
-    // Snap to grid centers and deduplicate
-    var result = [];
-    for (var j = 0; j < raw.length; j++) {
-      var sx = Math.round(raw[j].x * resolution) / resolution;
-      var sy = Math.round(raw[j].y * vRes) / vRes;
-      if (result.length === 0 || result[result.length - 1].x !== sx || result[result.length - 1].y !== sy) {
-        result.push({ x: sx, y: sy });
+        var t  = s / steps;
+        var sx = Math.min(gi.maxGx, Math.max(0, Math.round(prev.gx + dgx * t)));
+        var sy = Math.min(gi.maxGy, Math.max(0, Math.round(prev.gy + dgy * t)));
+        var last = result[result.length - 1];
+        if (sx !== last.gx || sy !== last.gy) {
+          result.push({ gx: sx, gy: sy });
+        }
       }
     }
     return result;
@@ -384,13 +402,12 @@
     startBtn.disabled = true;
     stopBtn.disabled  = false;
 
-    var res   = parseInt(resInput.value) || 50;
     var liftZ = 10; // mm above surface between segments
 
     // Pre-interpolate all paths
     var segments = [];
     for (var i = 0; i < paths.length; i++) {
-      var interp = interpolatePath(paths[i], res);
+      var interp = interpolatePath(paths[i]);
       if (interp.length > 0) segments.push(interp);
     }
 
@@ -401,7 +418,7 @@
       setProgress('Segment ' + (si + 1) + '/' + segments.length + ' — moving to start');
 
       // Move above the first point (lift Z)
-      var first = canvasToRobot(seg[0].x, seg[0].y);
+      var first = canvasToRobot(seg[0].gx, seg[0].gy);
       await cmdMove(first.x, first.y, first.z + liftZ);
       await waitIdle();
       if (aborted) break;
@@ -414,7 +431,7 @@
       // Trace each point
       for (var pi = 1; pi < seg.length; pi++) {
         if (aborted) break;
-        var pt = canvasToRobot(seg[pi].x, seg[pi].y);
+        var pt = canvasToRobot(seg[pi].gx, seg[pi].gy);
         await cmdMove(pt.x, pt.y, pt.z);
         await waitIdle();
         setProgress('Segment ' + (si + 1) + '/' + segments.length
@@ -423,7 +440,7 @@
       if (aborted) break;
 
       // Lift after segment
-      var last = canvasToRobot(seg[seg.length - 1].x, seg[seg.length - 1].y);
+      var last = canvasToRobot(seg[seg.length - 1].gx, seg[seg.length - 1].gy);
       await cmdMove(last.x, last.y, last.z + liftZ);
       await waitIdle();
     }
