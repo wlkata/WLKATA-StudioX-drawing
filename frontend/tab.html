@@ -1,0 +1,105 @@
+<div class="drawing">
+  <div class="drawing-left">
+    <div id="drawing-canvas-wrap" class="drawing-canvas-wrap">
+      <canvas id="drawing-canvas"></canvas>
+    </div>
+    <div class="drawing-toolbar">
+      <div class="drawing-mode-toggle">
+        <button id="drawing-mode-draw" class="drawing-mode-btn active">Draw</button>
+        <button id="drawing-mode-text" class="drawing-mode-btn" disabled title="Coming soon">Text</button>
+      </div>
+      <div class="drawing-res-row">
+        <span class="drawing-toolbar-label">Resolution</span>
+        <input id="drawing-resolution" type="number" value="50" min="10" max="500" step="5" />
+      </div>
+      <div class="drawing-canvas-btns">
+        <button id="drawing-undo" class="drawing-btn-secondary">Undo</button>
+        <button id="drawing-clear" class="drawing-btn-secondary">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawing-right">
+    <!-- Device selector -->
+    <div class="drawing-section drawing-device-section">
+      <h3 class="drawing-section-title">Robot</h3>
+      <div class="drawing-device-row">
+        <select id="drawing-device-select" class="drawing-select">
+          <option value="">-- select a robot --</option>
+        </select>
+        <button id="drawing-device-refresh" class="drawing-btn-secondary drawing-refresh-btn" title="Refresh">&#8635;</button>
+      </div>
+    </div>
+
+    <!-- Robot Control -->
+    <div class="drawing-section drawing-jog-section">
+      <h3 class="drawing-section-title">Robot Control</h3>
+      <div class="drawing-jog-axes">
+        <div class="drawing-jog-axis">
+          <span class="drawing-jog-label">X</span>
+          <button class="drawing-jog-btn" data-axis="x" data-dir="-1">&minus;</button>
+          <button class="drawing-jog-btn" data-axis="x" data-dir="1">+</button>
+        </div>
+        <div class="drawing-jog-axis">
+          <span class="drawing-jog-label">Y</span>
+          <button class="drawing-jog-btn" data-axis="y" data-dir="-1">&minus;</button>
+          <button class="drawing-jog-btn" data-axis="y" data-dir="1">+</button>
+        </div>
+        <div class="drawing-jog-axis">
+          <span class="drawing-jog-label">Z</span>
+          <button class="drawing-jog-btn" data-axis="z" data-dir="-1">&minus;</button>
+          <button class="drawing-jog-btn" data-axis="z" data-dir="1">+</button>
+        </div>
+      </div>
+      <div class="drawing-jog-step-row">
+        <span class="drawing-jog-label">Step</span>
+        <div class="drawing-jog-step-group">
+          <button class="drawing-jog-step" data-step="1">1</button>
+          <button class="drawing-jog-step active" data-step="5">5</button>
+          <button class="drawing-jog-step" data-step="10">10</button>
+        </div>
+        <span class="drawing-jog-unit">mm</span>
+      </div>
+    </div>
+
+    <!-- Calibration -->
+    <div class="drawing-section drawing-calib-section">
+      <h3 class="drawing-section-title">Calibration</h3>
+      <p class="drawing-hint">Jog the robot to each corner of the drawing area and record its position.</p>
+      <div class="drawing-calib-points">
+        <div class="drawing-calib-point">
+          <div class="drawing-calib-point-header">
+            <span class="drawing-calib-label">Top Left</span>
+            <span id="drawing-calib-tl" class="drawing-calib-value">&mdash;</span>
+          </div>
+          <button id="drawing-record-tl" class="drawing-btn-secondary drawing-record-btn">Record TL</button>
+        </div>
+        <div class="drawing-calib-point">
+          <div class="drawing-calib-point-header">
+            <span class="drawing-calib-label">Top Right</span>
+            <span id="drawing-calib-tr" class="drawing-calib-value">&mdash;</span>
+          </div>
+          <button id="drawing-record-tr" class="drawing-btn-secondary drawing-record-btn">Record TR</button>
+        </div>
+        <div class="drawing-calib-point">
+          <div class="drawing-calib-point-header">
+            <span class="drawing-calib-label">Bottom Right</span>
+            <span id="drawing-calib-br" class="drawing-calib-value">&mdash;</span>
+          </div>
+          <button id="drawing-record-br" class="drawing-btn-secondary drawing-record-btn">Record BR</button>
+        </div>
+      </div>
+      <div id="drawing-calib-status" class="drawing-calib-status">Not calibrated</div>
+    </div>
+
+    <!-- Execute -->
+    <div class="drawing-section drawing-exec-section">
+      <h3 class="drawing-section-title">Execute</h3>
+      <div class="drawing-exec-actions">
+        <button id="drawing-start" class="drawing-btn-primary" disabled>Start Drawing</button>
+        <button id="drawing-stop" class="drawing-btn-secondary" disabled>Stop</button>
+      </div>
+      <div id="drawing-progress" class="drawing-progress"></div>
+    </div>
+  </div>
+</div>
