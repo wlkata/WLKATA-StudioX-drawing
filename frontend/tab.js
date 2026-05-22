@@ -80,8 +80,11 @@
     var cell = w / res;                         // square cell in px
     var maxGx = res;                            // grid columns
     var maxGy = Math.floor(h / cell);           // grid rows (full cells only)
+    var boxW  = maxGx * cell;
+    var boxH  = maxGy * cell;
+    var oY    = (h - boxH) / 2;                 // centre the box vertically
     return { res: res, cell: cell, maxGx: maxGx, maxGy: maxGy,
-             boxW: maxGx * cell, boxH: maxGy * cell };
+             boxW: boxW, boxH: boxH, oY: oY };
   }
 
   // ---- Canvas rendering --------------------------------------------------
@@ -96,10 +99,11 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, w, h);
 
-    // Grey out area below the bounding box (outside drawable region)
-    if (gi.boxH < h) {
+    // Grey out areas above and below the bounding box
+    if (gi.oY > 0) {
       ctx.fillStyle = 'rgba(0,0,0,0.04)';
-      ctx.fillRect(0, gi.boxH, w, h - gi.boxH);
+      ctx.fillRect(0, 0, w, gi.oY);
+      ctx.fillRect(0, gi.oY + gi.boxH, w, h - gi.oY - gi.boxH);
     }
 
     // Grid lines (inside bounding box only)
@@ -109,12 +113,12 @@
     for (var gx = 0; gx <= gi.maxGx; gx += step) {
       var px = Math.round(gx * gi.cell) + 0.5;
       ctx.beginPath();
-      ctx.moveTo(px, 0);
-      ctx.lineTo(px, gi.boxH);
+      ctx.moveTo(px, gi.oY);
+      ctx.lineTo(px, gi.oY + gi.boxH);
       ctx.stroke();
     }
     for (var gy = 0; gy <= gi.maxGy; gy += step) {
-      var py = Math.round(gy * gi.cell) + 0.5;
+      var py = Math.round(gi.oY + gy * gi.cell) + 0.5;
       ctx.beginPath();
       ctx.moveTo(0, py);
       ctx.lineTo(gi.boxW, py);
@@ -125,7 +129,7 @@
     ctx.strokeStyle = 'rgba(33,150,243,0.5)';
     ctx.lineWidth   = 2;
     ctx.setLineDash([6, 3]);
-    ctx.strokeRect(1, 1, gi.boxW - 2, gi.boxH - 2);
+    ctx.strokeRect(1, gi.oY + 1, gi.boxW - 2, gi.boxH - 2);
     ctx.setLineDash([]);
 
     // Collect all paths (including the one being drawn)
@@ -145,15 +149,15 @@
       if (p.length === 1) {
         ctx.fillStyle = '#333';
         ctx.beginPath();
-        ctx.arc(p[0].gx * gi.cell, p[0].gy * gi.cell, 2, 0, Math.PI * 2);
+        ctx.arc(p[0].gx * gi.cell, gi.oY + p[0].gy * gi.cell, 2, 0, Math.PI * 2);
         ctx.fill();
         continue;
       }
 
       ctx.beginPath();
-      ctx.moveTo(p[0].gx * gi.cell, p[0].gy * gi.cell);
+      ctx.moveTo(p[0].gx * gi.cell, gi.oY + p[0].gy * gi.cell);
       for (var j = 1; j < p.length; j++) {
-        ctx.lineTo(p[j].gx * gi.cell, p[j].gy * gi.cell);
+        ctx.lineTo(p[j].gx * gi.cell, gi.oY + p[j].gy * gi.cell);
       }
       ctx.stroke();
     }
@@ -168,7 +172,7 @@
     var gi = gridInfo();
     return {
       gx: Math.min(gi.maxGx, Math.max(0, Math.round(rawPxX / gi.cell))),
-      gy: Math.min(gi.maxGy, Math.max(0, Math.round(rawPxY / gi.cell)))
+      gy: Math.min(gi.maxGy, Math.max(0, Math.round((rawPxY - gi.oY) / gi.cell)))
     };
   }
 
@@ -193,7 +197,7 @@
     var last = currentPath[currentPath.length - 1];
     // Distance from last point in grid-cell units
     var dxCells = rawPxX / gi.cell - last.gx;
-    var dyCells = rawPxY / gi.cell - last.gy;
+    var dyCells = (rawPxY - gi.oY) / gi.cell - last.gy;
     var distCells = Math.sqrt(dxCells * dxCells + dyCells * dyCells);
     // Wait until mouse is ≥ 0.9 cells from the last point.
     // At 0.9, a 45° movement is at (0.64, 0.64) → rounds to (1,1) diagonal.
@@ -346,10 +350,10 @@
       var steps = Math.max(1, Math.ceil(dist));  // 1 grid cell per step
       for (var s = 1; s <= steps; s++) {
         var t  = s / steps;
-        var sx = Math.min(gi.maxGx, Math.max(0, Math.round(prev.gx + dgx * t)));
-        var sy = Math.min(gi.maxGy, Math.max(0, Math.round(prev.gy + dgy * t)));
+        var sx = Math.min(gi.maxGx, Math.max(0, prev.gx + dgx * t));
+        var sy = Math.min(gi.maxGy, Math.max(0, prev.gy + dgy * t));
         var last = result[result.length - 1];
-        if (sx !== last.gx || sy !== last.gy) {
+        if (Math.abs(sx - last.gx) > 0.01 || Math.abs(sy - last.gy) > 0.01) {
           result.push({ gx: sx, gy: sy });
         }
       }
