@@ -4,10 +4,12 @@
   var canvas     = document.getElementById('drawing-canvas');
   var ctx        = canvas.getContext('2d');
   var canvasWrap = document.getElementById('drawing-canvas-wrap');
+  var textLayer  = document.getElementById('drawing-text-layer');
   var resInput   = document.getElementById('drawing-resolution');
   var undoBtn    = document.getElementById('drawing-undo');
   var clearBtn   = document.getElementById('drawing-clear');
-  var textInput  = document.getElementById('drawing-text');
+  var addTextBtn = document.getElementById('drawing-add-text');
+  var removeTextBtn = document.getElementById('drawing-remove-text');
   var sizeInput  = document.getElementById('drawing-char-size');
   var sizeWrap   = document.getElementById('drawing-size-wrap');
   var textErrorEl = document.getElementById('drawing-text-error');
@@ -26,23 +28,29 @@
 
   // ---- State -------------------------------------------------------------
 
-  var paths       = [];    // Array of arrays of {gx, gy} grid indices
+  var paths       = [];
   var currentPath = null;
   var isDrawing   = false;
 
-  var calib = { tl: null, tr: null, br: null }; // each {x, y, z}
+  var calib = { tl: null, tr: null, br: null };
   var isCalibrated = false;
   var executing    = false;
   var aborted      = false;
-  var selectedPort = null;  // serial port of the selected robot
+  var selectedPort = null;
 
-  var glyphMap = {};        // char -> { strokes: [[{x,y}...]] }  coords 0–1
-  var glyphMissing = [];    // unique missing characters
+  var textFields = [];
+  var selectedTextId = null;
+  var nextTextId = 1;
+  var textDrag = null;
+
+  var glyphMap = {};
+  var glyphMissing = [];
   var glyphFetchError = '';
   var glyphTimer = null;
   var glyphReq = 0;
 
   var _serverUrl = ExtensionAPI.getServerUrl();
+  var WS = /[ \t\u3000]/;
 
   // ---- Device selector ---------------------------------------------------
 
@@ -82,9 +90,6 @@
   setTimeout(resizeCanvas, 0);
 
   // ---- Grid helpers -------------------------------------------------------
-  // Square cells. After calibration, the drawable box matches the paper
-  // aspect (dist(TL,TR) / dist(TR,BR)) so an N×N cell block is a square
-  // in the real world when the corners form a rectangle.
 
   function dist3(a, b) {
     var dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
@@ -122,31 +127,44 @@
              boxW: boxW, boxH: boxH, oX: oX, oY: oY };
   }
 
-  function charSizeCells() {
-    var gi = gridInfo();
-    var n = parseInt(sizeInput.value, 10) || 10;
+  function clampSize(n, gi) {
+    n = parseInt(n, 10) || 10;
     if (n < 1) n = 1;
     var cap = Math.max(1, Math.min(gi.maxGx, gi.maxGy));
     if (n > cap) n = cap;
     return n;
   }
 
+  function selectedField() {
+    var i;
+    for (i = 0; i < textFields.length; i++) {
+      if (textFields[i].id === selectedTextId) return textFields[i];
+    }
+    return null;
+  }
+
   // ---- Text layout -------------------------------------------------------
 
-  var WS = /[ \t\u3000]/;
-
-  function layoutText(gi) {
-    var text = textInput.value || '';
-    var charCells = charSizeCells();
-    var cols = Math.floor(gi.maxGx / charCells);
-    var rows = Math.floor(gi.maxGy / charCells);
+  function layoutField(field, gi) {
+    var charCells = clampSize(field.size, gi);
+    var cols = Math.floor((gi.maxGx - field.gx) / charCells);
+    var rows = Math.floor((gi.maxGy - field.gy) / charCells);
+    if (cols < 0) cols = 0;
+    if (rows < 0) rows = 0;
     var cells = [];
     var missing = [];
     var overflow = false;
     var col = 0;
     var row = 0;
-    var chars = Array.from(text);
+    var usedCols = 0;
+    var usedRows = 0;
+    var chars = Array.from(field.text || '');
     var i, ch, g;
+
+    function markUsed() {
+      if (col + 1 > usedCols) usedCols = col + 1;
+      if (row + 1 > usedRows) usedRows = row + 1;
+    }
 
     function advance() {
       col += 1;
@@ -165,8 +183,8 @@
         continue;
       }
       if (WS.test(ch)) {
-        if (cols < 1) { overflow = true; continue; }
-        if (row >= rows) { overflow = true; continue; }
+        if (cols < 1 || row >= rows) { overflow = true; continue; }
+        markUsed();
         advance();
         continue;
       }
@@ -183,58 +201,92 @@
         missing: !g
       });
       if (!g && missing.indexOf(ch) < 0) missing.push(ch);
+      markUsed();
       advance();
     }
 
+    if (!usedCols) usedCols = Math.min(2, Math.max(1, cols));
+    if (!usedRows) usedRows = Math.min(1, Math.max(1, rows));
+
     return {
+      field: field,
       cells: cells,
       missing: missing,
       overflow: overflow,
+      charCells: charCells,
       cols: cols,
       rows: rows,
-      charCells: charCells
+      usedCols: usedCols,
+      usedRows: usedRows
     };
   }
 
-  function mapGlyphPoint(cell, nx, ny, layout) {
-    var inset = layout.charCells * 0.1;
-    var inner = layout.charCells - 2 * inset;
-    if (inner < 0.01) inner = layout.charCells;
+  function layoutAll(gi) {
+    var out = [];
+    var i;
+    for (i = 0; i < textFields.length; i++) {
+      out.push(layoutField(textFields[i], gi));
+    }
+    return out;
+  }
+
+  function mapGlyphPoint(field, cell, nx, ny, charCells) {
+    var inset = charCells * 0.1;
+    var inner = charCells - 2 * inset;
+    if (inner < 0.01) inner = charCells;
     return {
-      gx: cell.col * layout.charCells + inset + nx * inner,
-      gy: cell.row * layout.charCells + inset + ny * inner
+      gx: field.gx + cell.col * charCells + inset + nx * inner,
+      gy: field.gy + cell.row * charCells + inset + ny * inner
     };
   }
 
-  function textHasContent(layout) {
-    var i;
-    for (i = 0; i < layout.cells.length; i++) {
-      if (layout.cells[i].strokes && layout.cells[i].strokes.length) return true;
+  function combinedText() {
+    var i, s = '';
+    for (i = 0; i < textFields.length; i++) s += textFields[i].text || '';
+    return s;
+  }
+
+  function textHasContent(layouts) {
+    var i, j, cells;
+    for (i = 0; i < layouts.length; i++) {
+      cells = layouts[i].cells;
+      for (j = 0; j < cells.length; j++) {
+        if (cells[j].strokes && cells[j].strokes.length) return true;
+      }
     }
     return false;
   }
 
-  function textHasErrors(layout) {
+  function textHasErrors(layouts) {
+    var i, j;
     if (glyphFetchError) return true;
-    if (layout.overflow) return true;
     if (glyphMissing.length) return true;
-    var i;
-    for (i = 0; i < layout.cells.length; i++) {
-      if (layout.cells[i].missing) return true;
+    for (i = 0; i < layouts.length; i++) {
+      if (layouts[i].overflow) return true;
+      for (j = 0; j < layouts[i].cells.length; j++) {
+        if (layouts[i].cells[j].missing) return true;
+      }
     }
     return false;
   }
 
-  function updateTextError(layout) {
+  function textHasTypedChars() {
+    return /[^\s\u3000]/.test(combinedText());
+  }
+
+  function updateTextError(layouts) {
     var parts = [];
+    var overflow = false;
+    var i;
     if (glyphFetchError) {
       parts.push(glyphFetchError);
     } else if (glyphMissing.length) {
       parts.push('No stroke data for: ' + glyphMissing.join(' '));
     }
-    if (layout.overflow) {
-      parts.push('Text does not fit the drawing area.');
+    for (i = 0; i < layouts.length; i++) {
+      if (layouts[i].overflow) overflow = true;
     }
+    if (overflow) parts.push('Text does not fit the drawing area.');
     textErrorEl.textContent = parts.join(' ');
   }
 
@@ -244,7 +296,7 @@
   }
 
   function fetchGlyphs() {
-    var text = textInput.value || '';
+    var text = combinedText();
     var i, ch;
     var chars = Array.from(text);
     var need = [];
@@ -291,40 +343,183 @@
       });
   }
 
-  textInput.addEventListener('input', function () {
+  function selectTextField(id) {
+    selectedTextId = id;
+    var field = selectedField();
+    if (field) {
+      sizeInput.disabled = false;
+      sizeInput.value = String(clampSize(field.size, gridInfo()));
+      sizeWrap.classList.add('active');
+      removeTextBtn.disabled = executing;
+    } else {
+      sizeInput.disabled = true;
+      sizeWrap.classList.remove('active');
+      removeTextBtn.disabled = true;
+    }
+    syncTextOverlays();
+  }
+
+  function addTextField() {
+    var gi = gridInfo();
+    var size = selectedField() ? clampSize(selectedField().size, gi) : 10;
+    size = clampSize(size, gi);
+    var gx = 2 + ((textFields.length * 3) % Math.max(1, gi.maxGx - size - 2));
+    var gy = 3 + Math.floor(textFields.length / 6) * (size + 1);
+    if (gy > gi.maxGy - size) gy = 3;
+    if (gx < 0) gx = 0;
+    if (gy < 0) gy = 0;
+    var field = { id: nextTextId++, gx: gx, gy: gy, size: size, text: '' };
+    textFields.push(field);
+    selectTextField(field.id);
+    renderCanvas();
+    updateUI();
+    var el = textLayer.querySelector('[data-text-id="' + field.id + '"]');
+    if (el) {
+      var ta = el.querySelector('textarea');
+      if (ta) ta.focus();
+    }
+  }
+
+  function removeSelectedText() {
+    if (selectedTextId == null) return;
+    textFields = textFields.filter(function (f) { return f.id !== selectedTextId; });
+    selectTextField(null);
     scheduleGlyphFetch();
     renderCanvas();
     updateUI();
-  });
-  textInput.addEventListener('focus', function () {
-    sizeWrap.classList.add('active');
-  });
-  textInput.addEventListener('blur', function () {
-    sizeWrap.classList.remove('active');
-  });
-  sizeInput.addEventListener('focus', function () {
-    sizeWrap.classList.add('active');
-  });
-  sizeInput.addEventListener('blur', function () {
-    if (document.activeElement !== textInput) sizeWrap.classList.remove('active');
-  });
-  function clampSizeInput() {
-    var gi = gridInfo();
-    var cap = Math.max(1, Math.min(gi.maxGx, gi.maxGy));
-    var n = parseInt(sizeInput.value, 10);
-    if (!isFinite(n) || n < 1) n = 1;
-    if (n > cap) n = cap;
-    if (String(n) !== sizeInput.value) sizeInput.value = n;
   }
 
+  function createTextItem(field) {
+    var el = document.createElement('div');
+    el.className = 'drawing-text-item';
+    el.setAttribute('data-text-id', String(field.id));
+    var bar = document.createElement('div');
+    bar.className = 'drawing-text-item-bar';
+    bar.title = 'Drag to move';
+    var ta = document.createElement('textarea');
+    ta.className = 'drawing-text-item-input';
+    ta.placeholder = '汉字';
+    ta.spellcheck = false;
+    ta.value = field.text || '';
+    el.appendChild(bar);
+    el.appendChild(ta);
+    textLayer.appendChild(el);
+
+    el.addEventListener('mousedown', function (e) {
+      if (executing) return;
+      selectTextField(field.id);
+      if (e.target === bar) {
+        e.preventDefault();
+        startTextDrag(field, e);
+      }
+      e.stopPropagation();
+    });
+    ta.addEventListener('input', function () {
+      field.text = ta.value;
+      scheduleGlyphFetch();
+      renderCanvas();
+      updateUI();
+    });
+    ta.addEventListener('focus', function () {
+      selectTextField(field.id);
+    });
+    return el;
+  }
+
+  function startTextDrag(field, e) {
+    textDrag = {
+      field: field,
+      origGx: field.gx,
+      origGy: field.gy,
+      x: e.clientX,
+      y: e.clientY
+    };
+    document.addEventListener('mousemove', onTextDragMove);
+    document.addEventListener('mouseup', onTextDragEnd);
+  }
+
+  function onTextDragMove(e) {
+    if (!textDrag) return;
+    var gi = gridInfo();
+    var field = textDrag.field;
+    var charCells = clampSize(field.size, gi);
+    var gx = Math.round(textDrag.origGx + (e.clientX - textDrag.x) / gi.cell);
+    var gy = Math.round(textDrag.origGy + (e.clientY - textDrag.y) / gi.cell);
+    var maxGx = Math.max(0, gi.maxGx - charCells);
+    var maxGy = Math.max(0, gi.maxGy - charCells);
+    if (gx < 0) gx = 0;
+    if (gy < 0) gy = 0;
+    if (gx > maxGx) gx = maxGx;
+    if (gy > maxGy) gy = maxGy;
+    field.gx = gx;
+    field.gy = gy;
+    renderCanvas();
+  }
+
+  function onTextDragEnd() {
+    textDrag = null;
+    document.removeEventListener('mousemove', onTextDragMove);
+    document.removeEventListener('mouseup', onTextDragEnd);
+    updateUI();
+  }
+
+  function syncTextOverlays() {
+    var gi = gridInfo();
+    if (!gi.cell) return;
+    var seen = {};
+    var i, field, el, ta, layout, side, cols, rows;
+    for (i = 0; i < textFields.length; i++) {
+      field = textFields[i];
+      seen[field.id] = true;
+      el = textLayer.querySelector('[data-text-id="' + field.id + '"]');
+      if (!el) el = createTextItem(field);
+      layout = layoutField(field, gi);
+      side = layout.charCells * gi.cell;
+      cols = Math.max(1, layout.usedCols);
+      rows = Math.max(1, layout.usedRows);
+      el.style.left = (gi.oX + field.gx * gi.cell) + 'px';
+      el.style.top = (gi.oY + field.gy * gi.cell) + 'px';
+      el.style.width = (cols * side) + 'px';
+      el.style.height = (rows * side) + 'px';
+      el.classList.toggle('selected', field.id === selectedTextId);
+      ta = el.querySelector('textarea');
+      if (ta) {
+        if (document.activeElement !== ta && ta.value !== (field.text || '')) {
+          ta.value = field.text || '';
+        }
+        ta.style.fontSize = Math.max(10, side * 0.72) + 'px';
+        ta.style.lineHeight = side + 'px';
+      }
+    }
+    var nodes = textLayer.querySelectorAll('.drawing-text-item');
+    for (i = 0; i < nodes.length; i++) {
+      if (!seen[nodes[i].getAttribute('data-text-id')]) {
+        nodes[i].parentNode.removeChild(nodes[i]);
+      }
+    }
+  }
+
+  addTextBtn.addEventListener('click', addTextField);
+  removeTextBtn.addEventListener('click', removeSelectedText);
+
   sizeInput.addEventListener('change', function () {
-    clampSizeInput();
+    var field = selectedField();
+    if (!field) return;
+    var gi = gridInfo();
+    field.size = clampSize(sizeInput.value, gi);
+    sizeInput.value = String(field.size);
     renderCanvas();
     updateUI();
   });
   sizeInput.addEventListener('input', function () {
+    var field = selectedField();
+    if (!field) return;
+    field.size = clampSize(sizeInput.value, gridInfo());
     renderCanvas();
     updateUI();
+  });
+  sizeInput.addEventListener('focus', function () {
+    if (selectedField()) sizeWrap.classList.add('active');
   });
 
   // ---- Canvas rendering --------------------------------------------------
@@ -334,8 +529,8 @@
     var h = canvas.height;
     if (w === 0 || h === 0) return;
     var gi = gridInfo();
-    var layout = layoutText(gi);
-    var i, j, p, cell, stroke, pt, px, py;
+    var layouts = layoutAll(gi);
+    var i, j, p, cell, stroke, pt, px, py, layout, field, x0, y0, side;
 
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, w, h);
@@ -374,45 +569,45 @@
     ctx.strokeRect(gi.oX + 1, gi.oY + 1, gi.boxW - 2, gi.boxH - 2);
     ctx.setLineDash([]);
 
-    // Character cells
-    for (i = 0; i < layout.cells.length; i++) {
-      cell = layout.cells[i];
-      var x0 = gi.oX + cell.col * layout.charCells * gi.cell;
-      var y0 = gi.oY + cell.row * layout.charCells * gi.cell;
-      var side = layout.charCells * gi.cell;
-      if (cell.missing) {
-        ctx.strokeStyle = 'rgba(198,40,40,0.7)';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 3]);
-        ctx.strokeRect(x0 + 1, y0 + 1, side - 2, side - 2);
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#c62828';
-        ctx.font = Math.max(10, Math.floor(side * 0.45)) + 'px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(cell.ch, x0 + side / 2, y0 + side / 2);
-        continue;
-      }
-      ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x0 + 0.5, y0 + 0.5, side - 1, side - 1);
-
-      if (!cell.strokes) continue;
-      ctx.strokeStyle = '#111';
-      ctx.lineWidth = Math.max(1.2, gi.cell * 0.12);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      for (j = 0; j < cell.strokes.length; j++) {
-        stroke = cell.strokes[j];
-        if (!stroke.length) continue;
-        ctx.beginPath();
-        pt = mapGlyphPoint(cell, stroke[0].x, stroke[0].y, layout);
-        ctx.moveTo(gi.oX + pt.gx * gi.cell, gi.oY + pt.gy * gi.cell);
-        for (p = 1; p < stroke.length; p++) {
-          pt = mapGlyphPoint(cell, stroke[p].x, stroke[p].y, layout);
-          ctx.lineTo(gi.oX + pt.gx * gi.cell, gi.oY + pt.gy * gi.cell);
+    for (i = 0; i < layouts.length; i++) {
+      layout = layouts[i];
+      field = layout.field;
+      for (j = 0; j < layout.cells.length; j++) {
+        cell = layout.cells[j];
+        x0 = gi.oX + (field.gx + cell.col * layout.charCells) * gi.cell;
+        y0 = gi.oY + (field.gy + cell.row * layout.charCells) * gi.cell;
+        side = layout.charCells * gi.cell;
+        if (cell.missing) {
+          ctx.strokeStyle = 'rgba(198,40,40,0.7)';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.strokeRect(x0 + 1, y0 + 1, side - 2, side - 2);
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#c62828';
+          ctx.font = Math.max(10, Math.floor(side * 0.45)) + 'px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(cell.ch, x0 + side / 2, y0 + side / 2);
+          continue;
         }
-        ctx.stroke();
+        if (!cell.strokes) continue;
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = Math.max(1.2, gi.cell * 0.12);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        var s;
+        for (s = 0; s < cell.strokes.length; s++) {
+          stroke = cell.strokes[s];
+          if (!stroke.length) continue;
+          ctx.beginPath();
+          pt = mapGlyphPoint(field, cell, stroke[0].x, stroke[0].y, layout.charCells);
+          ctx.moveTo(gi.oX + pt.gx * gi.cell, gi.oY + pt.gy * gi.cell);
+          for (p = 1; p < stroke.length; p++) {
+            pt = mapGlyphPoint(field, cell, stroke[p].x, stroke[p].y, layout.charCells);
+            ctx.lineTo(gi.oX + pt.gx * gi.cell, gi.oY + pt.gy * gi.cell);
+          }
+          ctx.stroke();
+        }
       }
     }
 
@@ -444,7 +639,8 @@
       ctx.stroke();
     }
 
-    updateTextError(layout);
+    syncTextOverlays();
+    updateTextError(layouts);
   }
 
   resInput.addEventListener('change', function () {
@@ -469,6 +665,7 @@
 
   canvas.addEventListener('mousedown', function (e) {
     if (executing) return;
+    selectTextField(null);
     isDrawing   = true;
     currentPath = [canvasPos(e)];
     renderCanvas();
@@ -568,11 +765,13 @@
     calibStatusEl.classList.toggle('calibrated', isCalibrated);
 
     var gi = gridInfo();
-    var layout = layoutText(gi);
-    var hasText = textHasContent(layout);
+    var layouts = layoutAll(gi);
+    var hasText = textHasContent(layouts);
     var hasDraw = paths.length > 0;
-    var textErr = (textInput.value || '').replace(/\s/g, '').length > 0 && textHasErrors(layout);
+    var textErr = textHasTypedChars() && textHasErrors(layouts);
     startBtn.disabled = !isCalibrated || executing || (!hasDraw && !hasText) || textErr;
+    addTextBtn.disabled = executing;
+    removeTextBtn.disabled = executing || selectedTextId == null;
   }
 
   function recordCalibPoint(key) {
@@ -610,9 +809,6 @@
   updateUI();
 
   // ---- Coordinate transform ----------------------------------------------
-  // TL=(0,0)  TR=(maxGx,0)  BR=(maxGx,maxGy)
-  // BL = TL + BR − TR   (parallelogram)
-  // P(u,v) = TL + u*(TR−TL) + v*(BL−TL)   where u,v ∈ [0,1]
 
   function canvasToRobot(gx, gy) {
     var gi = gridInfo();
@@ -628,8 +824,6 @@
       z: tl.z + u * (tr.z - tl.z) + v * (blz - tl.z)
     };
   }
-
-  // ---- Path interpolation ------------------------------------------------
 
   function interpolatePath(path) {
     if (path.length <= 1) return path.slice();
@@ -653,8 +847,6 @@
     }
     return result;
   }
-
-  // ---- Execution helpers -------------------------------------------------
 
   function sleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
@@ -691,33 +883,38 @@
 
   function buildSegments() {
     var gi = gridInfo();
-    var layout = layoutText(gi);
+    var layouts = layoutAll(gi);
     var segments = [];
-    var i, j, k, cell, stroke, pts, interp, totalChars, charIndex, pt;
+    var i, j, k, s, layout, cell, stroke, pts, interp, pt, totalChars, charIndex;
 
     totalChars = 0;
-    for (i = 0; i < layout.cells.length; i++) {
-      if (layout.cells[i].strokes && layout.cells[i].strokes.length) totalChars += 1;
+    for (i = 0; i < layouts.length; i++) {
+      for (j = 0; j < layouts[i].cells.length; j++) {
+        if (layouts[i].cells[j].strokes && layouts[i].cells[j].strokes.length) totalChars += 1;
+      }
     }
     charIndex = 0;
-    for (i = 0; i < layout.cells.length; i++) {
-      cell = layout.cells[i];
-      if (!cell.strokes || !cell.strokes.length) continue;
-      charIndex += 1;
-      for (j = 0; j < cell.strokes.length; j++) {
-        stroke = cell.strokes[j];
-        pts = [];
-        for (k = 0; k < stroke.length; k++) {
-          pt = mapGlyphPoint(cell, stroke[k].x, stroke[k].y, layout);
-          pts.push(pt);
-        }
-        interp = interpolatePath(pts);
-        if (interp.length > 0) {
-          segments.push({
-            points: interp,
-            label: 'Character ' + charIndex + '/' + totalChars + ' ' + cell.ch
-                    + ' — stroke ' + (j + 1) + '/' + cell.strokes.length
-          });
+    for (i = 0; i < layouts.length; i++) {
+      layout = layouts[i];
+      for (j = 0; j < layout.cells.length; j++) {
+        cell = layout.cells[j];
+        if (!cell.strokes || !cell.strokes.length) continue;
+        charIndex += 1;
+        for (s = 0; s < cell.strokes.length; s++) {
+          stroke = cell.strokes[s];
+          pts = [];
+          for (k = 0; k < stroke.length; k++) {
+            pt = mapGlyphPoint(layout.field, cell, stroke[k].x, stroke[k].y, layout.charCells);
+            pts.push(pt);
+          }
+          interp = interpolatePath(pts);
+          if (interp.length > 0) {
+            segments.push({
+              points: interp,
+              label: 'Character ' + charIndex + '/' + totalChars + ' ' + cell.ch
+                      + ' — stroke ' + (s + 1) + '/' + cell.strokes.length
+            });
+          }
         }
       }
     }
@@ -739,6 +936,8 @@
     aborted   = false;
     startBtn.disabled = true;
     stopBtn.disabled  = false;
+    addTextBtn.disabled = true;
+    removeTextBtn.disabled = true;
 
     var liftZ = 10;
     var segments = buildSegments();
@@ -797,9 +996,9 @@
   startBtn.addEventListener('click', function () {
     if (!isCalibrated) return;
     var gi = gridInfo();
-    var layout = layoutText(gi);
-    if (!paths.length && !textHasContent(layout)) return;
-    if ((textInput.value || '').replace(/\s/g, '').length > 0 && textHasErrors(layout)) return;
+    var layouts = layoutAll(gi);
+    if (!paths.length && !textHasContent(layouts)) return;
+    if (textHasTypedChars() && textHasErrors(layouts)) return;
     showModal();
   });
 

@@ -2,18 +2,16 @@
   <div class="drawing-left">
     <div id="drawing-canvas-wrap" class="drawing-canvas-wrap">
       <canvas id="drawing-canvas"></canvas>
+      <div id="drawing-text-layer" class="drawing-text-layer"></div>
     </div>
-    <div class="drawing-text-block">
-      <div class="drawing-text-row">
-        <textarea id="drawing-text" class="drawing-text" rows="2" placeholder="Type Chinese characters…"></textarea>
-        <label id="drawing-size-wrap" class="drawing-size-row" for="drawing-char-size">
-          <span class="drawing-toolbar-label">Size</span>
-          <input id="drawing-char-size" type="number" value="10" min="4" max="200" step="1" />
-        </label>
-      </div>
-      <div id="drawing-text-error" class="drawing-text-error"></div>
-    </div>
+    <div id="drawing-text-error" class="drawing-text-error"></div>
     <div class="drawing-toolbar">
+      <button id="drawing-add-text" class="drawing-btn-secondary">Add text</button>
+      <button id="drawing-remove-text" class="drawing-btn-secondary" disabled>Remove</button>
+      <label id="drawing-size-wrap" class="drawing-size-row" for="drawing-char-size">
+        <span class="drawing-toolbar-label">Size</span>
+        <input id="drawing-char-size" type="number" value="10" min="1" max="200" step="1" disabled />
+      </label>
       <div class="drawing-res-row">
         <span class="drawing-toolbar-label">Resolution</span>
         <input id="drawing-resolution" type="number" value="50" min="10" max="500" step="5" />

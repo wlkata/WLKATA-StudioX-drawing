@@ -30,7 +30,7 @@
   flex: 1;
   min-height: 200px;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--border-primary, #ccc);
   background: #fff;
   position: relative;
@@ -42,42 +42,71 @@
   cursor: crosshair;
 }
 
-/* ---- text input ---- */
-.drawing-text-block {
-  margin-top: 8px;
-  flex-shrink: 0;
+.drawing-text-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
 }
-.drawing-text-row {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
+.drawing-text-item {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  border: 1px dashed rgba(33, 150, 243, 0.45);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
 }
-.drawing-text {
-  flex: 1;
-  min-width: 0;
-  resize: vertical;
-  min-height: 44px;
-  max-height: 120px;
-  padding: 6px 8px;
-  border: 1px solid var(--border-primary, #ccc);
-  border-radius: 6px;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #333);
-  font-size: 16px;
-  line-height: 1.4;
+.drawing-text-item.selected {
+  border: 2px solid var(--accent, #2196F3);
+  background: rgba(33, 150, 243, 0.08);
+  z-index: 3;
+}
+.drawing-text-item-bar {
+  position: absolute;
+  top: -14px;
+  left: 0;
+  right: 0;
+  height: 14px;
+  border-radius: 4px 4px 0 0;
+  background: rgba(33, 150, 243, 0.45);
+  cursor: grab;
+}
+.drawing-text-item.selected .drawing-text-item-bar {
+  background: var(--accent, #2196F3);
+}
+.drawing-text-item-bar:active {
+  cursor: grabbing;
+}
+.drawing-text-item-input {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 2px;
+  border: none;
+  resize: none;
   outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--accent, #2196F3);
   font-family: inherit;
+  overflow: hidden;
+  word-break: break-all;
 }
-.drawing-text:focus {
-  border-color: var(--accent, #2196F3);
+.drawing-text-item-input::placeholder {
+  color: transparent;
 }
+.drawing-text-item.selected .drawing-text-item-input {
+  color: transparent;
+}
+
 .drawing-size-row {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
-  padding: 4px 8px;
+  padding: 3px 6px;
   border: 1px solid transparent;
   border-radius: 6px;
 }
@@ -86,7 +115,7 @@
   background: var(--bg-secondary, #f5f5f5);
 }
 .drawing-size-row input {
-  width: 60px;
+  width: 52px;
   padding: 4px 6px;
   border: 1px solid var(--border-primary, #ccc);
   border-radius: 4px;
@@ -99,9 +128,13 @@
 .drawing-size-row input:focus {
   border-color: var(--accent, #2196F3);
 }
+.drawing-size-row input:disabled {
+  opacity: 0.45;
+}
 .drawing-text-error {
   min-height: 16px;
-  margin-top: 4px;
+  margin-top: 6px;
+  flex-shrink: 0;
   font-size: 11px;
   color: #c62828;
   line-height: 1.4;
