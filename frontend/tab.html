@@ -3,11 +3,17 @@
     <div id="drawing-canvas-wrap" class="drawing-canvas-wrap">
       <canvas id="drawing-canvas"></canvas>
     </div>
-    <div class="drawing-toolbar">
-      <div class="drawing-mode-toggle">
-        <button id="drawing-mode-draw" class="drawing-mode-btn active">Draw</button>
-        <button id="drawing-mode-text" class="drawing-mode-btn" disabled title="Coming soon">Text</button>
+    <div class="drawing-text-block">
+      <div class="drawing-text-row">
+        <textarea id="drawing-text" class="drawing-text" rows="2" placeholder="Type Chinese characters…"></textarea>
+        <label id="drawing-size-wrap" class="drawing-size-row" for="drawing-char-size">
+          <span class="drawing-toolbar-label">Size</span>
+          <input id="drawing-char-size" type="number" value="10" min="4" max="200" step="1" />
+        </label>
       </div>
+      <div id="drawing-text-error" class="drawing-text-error"></div>
+    </div>
+    <div class="drawing-toolbar">
       <div class="drawing-res-row">
         <span class="drawing-toolbar-label">Resolution</span>
         <input id="drawing-resolution" type="number" value="50" min="10" max="500" step="5" />
@@ -89,6 +95,9 @@
           <button id="drawing-record-br" class="drawing-btn-secondary drawing-record-btn">Record BR</button>
         </div>
       </div>
+      <div class="drawing-calib-actions">
+        <button id="drawing-clear-calib" class="drawing-btn-secondary">Clear</button>
+      </div>
       <div id="drawing-calib-status" class="drawing-calib-status">Not calibrated</div>
     </div>
 
@@ -100,6 +109,17 @@
         <button id="drawing-stop" class="drawing-btn-secondary" disabled>Stop</button>
       </div>
       <div id="drawing-progress" class="drawing-progress"></div>
+    </div>
+  </div>
+
+  <div id="drawing-modal" class="drawing-modal" hidden>
+    <div class="drawing-modal-card">
+      <h3 class="drawing-modal-title">Check calibration</h3>
+      <p class="drawing-modal-body">Make sure the robotic arm is aligned with the drawing area. Saved corner positions from last time will be used if you have not re-recorded them. That is fine if the arm has not moved.</p>
+      <div class="drawing-modal-actions">
+        <button id="drawing-modal-cancel" class="drawing-btn-secondary">Cancel</button>
+        <button id="drawing-modal-confirm" class="drawing-btn-primary">Start Drawing</button>
+      </div>
     </div>
   </div>
 </div>

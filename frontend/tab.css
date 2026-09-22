@@ -7,6 +7,7 @@
   padding: 16px;
   box-sizing: border-box;
   overflow: hidden;
+  position: relative;
 }
 
 /* ---- two-column layout ---- */
@@ -41,6 +42,71 @@
   cursor: crosshair;
 }
 
+/* ---- text input ---- */
+.drawing-text-block {
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+.drawing-text-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.drawing-text {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  font-size: 16px;
+  line-height: 1.4;
+  outline: none;
+  font-family: inherit;
+}
+.drawing-text:focus {
+  border-color: var(--accent, #2196F3);
+}
+.drawing-size-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.drawing-size-row.active {
+  border-color: var(--accent, #2196F3);
+  background: var(--bg-secondary, #f5f5f5);
+}
+.drawing-size-row input {
+  width: 60px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+}
+.drawing-size-row input:focus {
+  border-color: var(--accent, #2196F3);
+}
+.drawing-text-error {
+  min-height: 16px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #c62828;
+  line-height: 1.4;
+}
+
 /* ---- toolbar below canvas ---- */
 .drawing-toolbar {
   display: flex;
@@ -49,35 +115,6 @@
   margin-top: 8px;
   flex-shrink: 0;
   flex-wrap: wrap;
-}
-
-/* mode toggle */
-.drawing-mode-toggle {
-  display: flex;
-  border: 1px solid var(--border-primary, #ccc);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.drawing-mode-btn {
-  padding: 5px 14px;
-  border: none;
-  background: var(--bg-secondary, #f5f5f5);
-  color: var(--text-primary, #333);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.drawing-mode-btn + .drawing-mode-btn {
-  border-left: 1px solid var(--border-primary, #ccc);
-}
-.drawing-mode-btn.active {
-  background: var(--accent, #2196F3);
-  color: #fff;
-}
-.drawing-mode-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 
 /* resolution */
@@ -319,6 +356,11 @@
   color: #43a047;
   font-weight: 600;
 }
+.drawing-calib-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
 
 /* ---- execute section ---- */
 .drawing-exec-section {
@@ -340,4 +382,42 @@
 .drawing-progress.running {
   color: var(--accent, #2196F3);
   font-weight: 600;
+}
+
+/* ---- confirm modal ---- */
+.drawing-modal {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 16px;
+}
+.drawing-modal[hidden] {
+  display: none;
+}
+.drawing-modal-card {
+  width: min(420px, 100%);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+}
+.drawing-modal-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.drawing-modal-body {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #666);
+}
+.drawing-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

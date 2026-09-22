@@ -7,6 +7,10 @@
   var resInput   = document.getElementById('drawing-resolution');
   var undoBtn    = document.getElementById('drawing-undo');
   var clearBtn   = document.getElementById('drawing-clear');
+  var textInput  = document.getElementById('drawing-text');
+  var sizeInput  = document.getElementById('drawing-char-size');
+  var sizeWrap   = document.getElementById('drawing-size-wrap');
+  var textErrorEl = document.getElementById('drawing-text-error');
   var calibTLEl  = document.getElementById('drawing-calib-tl');
   var calibTREl  = document.getElementById('drawing-calib-tr');
   var calibBREl  = document.getElementById('drawing-calib-br');
@@ -16,6 +20,9 @@
   var progressEl = document.getElementById('drawing-progress');
   var deviceSelect  = document.getElementById('drawing-device-select');
   var deviceRefresh = document.getElementById('drawing-device-refresh');
+  var modalEl    = document.getElementById('drawing-modal');
+  var modalCancel = document.getElementById('drawing-modal-cancel');
+  var modalConfirm = document.getElementById('drawing-modal-confirm');
 
   // ---- State -------------------------------------------------------------
 
@@ -28,6 +35,12 @@
   var executing    = false;
   var aborted      = false;
   var selectedPort = null;  // serial port of the selected robot
+
+  var glyphMap = {};        // char -> { strokes: [[{x,y}...]] }  coords 0–1
+  var glyphMissing = [];    // unique missing characters
+  var glyphFetchError = '';
+  var glyphTimer = null;
+  var glyphReq = 0;
 
   var _serverUrl = ExtensionAPI.getServerUrl();
 
@@ -45,7 +58,6 @@
         opt.textContent = d.model + ' (' + d.port + ')';
         deviceSelect.appendChild(opt);
       });
-      // Restore previous selection if still available
       if (prev) deviceSelect.value = prev;
       selectedPort = deviceSelect.value || null;
     }).catch(function () {});
@@ -70,22 +82,250 @@
   setTimeout(resizeCanvas, 0);
 
   // ---- Grid helpers -------------------------------------------------------
-  // All grid math uses a single square cell size (cellW = canvasWidth / res)
-  // for both axes so rendering and snapping always agree.
+  // Square cells. After calibration, the drawable box matches the paper
+  // aspect (dist(TL,TR) / dist(TR,BR)) so an N×N cell block is a square
+  // in the real world when the corners form a rectangle.
+
+  function dist3(a, b) {
+    var dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+
+  function paperAspect() {
+    if (!(calib.tl && calib.tr && calib.br)) return null;
+    var w = dist3(calib.tl, calib.tr);
+    var h = dist3(calib.tr, calib.br);
+    if (w < 1e-6 || h < 1e-6) return null;
+    return w / h;
+  }
 
   function gridInfo() {
-    var res  = parseInt(resInput.value) || 50;
-    var w    = canvas.width;
-    var h    = canvas.height;
-    var cell = w / res;                         // square cell in px
-    var maxGx = res;                            // grid columns
-    var maxGy = Math.floor(h / cell);           // grid rows (full cells only)
-    var boxW  = maxGx * cell;
-    var boxH  = maxGy * cell;
-    var oY    = (h - boxH) / 2;                 // centre the box vertically
+    var res = parseInt(resInput.value, 10) || 50;
+    if (res < 1) res = 1;
+    var w = canvas.width;
+    var h = canvas.height;
+    var aspect = paperAspect();
+    if (!aspect || !isFinite(aspect)) {
+      aspect = (h > 0) ? (w / h) : 1;
+    }
+
+    var maxGx = res;
+    var maxGy = Math.max(1, Math.round(maxGx / aspect));
+    var cell = (maxGx > 0 && maxGy > 0)
+      ? Math.min(w / maxGx, h / maxGy)
+      : 1;
+    var boxW = maxGx * cell;
+    var boxH = maxGy * cell;
+    var oX = (w - boxW) / 2;
+    var oY = (h - boxH) / 2;
     return { res: res, cell: cell, maxGx: maxGx, maxGy: maxGy,
-             boxW: boxW, boxH: boxH, oY: oY };
+             boxW: boxW, boxH: boxH, oX: oX, oY: oY };
   }
+
+  function charSizeCells() {
+    var gi = gridInfo();
+    var n = parseInt(sizeInput.value, 10) || 10;
+    if (n < 1) n = 1;
+    var cap = Math.max(1, Math.min(gi.maxGx, gi.maxGy));
+    if (n > cap) n = cap;
+    return n;
+  }
+
+  // ---- Text layout -------------------------------------------------------
+
+  var WS = /[ \t\u3000]/;
+
+  function layoutText(gi) {
+    var text = textInput.value || '';
+    var charCells = charSizeCells();
+    var cols = Math.floor(gi.maxGx / charCells);
+    var rows = Math.floor(gi.maxGy / charCells);
+    var cells = [];
+    var missing = [];
+    var overflow = false;
+    var col = 0;
+    var row = 0;
+    var chars = Array.from(text);
+    var i, ch, g;
+
+    function advance() {
+      col += 1;
+      if (col >= cols) {
+        col = 0;
+        row += 1;
+      }
+    }
+
+    for (i = 0; i < chars.length; i++) {
+      ch = chars[i];
+      if (ch === '\r') continue;
+      if (ch === '\n') {
+        col = 0;
+        row += 1;
+        continue;
+      }
+      if (WS.test(ch)) {
+        if (cols < 1) { overflow = true; continue; }
+        if (row >= rows) { overflow = true; continue; }
+        advance();
+        continue;
+      }
+      if (cols < 1 || row >= rows) {
+        overflow = true;
+        continue;
+      }
+      g = glyphMap[ch];
+      cells.push({
+        ch: ch,
+        col: col,
+        row: row,
+        strokes: g ? g.strokes : null,
+        missing: !g
+      });
+      if (!g && missing.indexOf(ch) < 0) missing.push(ch);
+      advance();
+    }
+
+    return {
+      cells: cells,
+      missing: missing,
+      overflow: overflow,
+      cols: cols,
+      rows: rows,
+      charCells: charCells
+    };
+  }
+
+  function mapGlyphPoint(cell, nx, ny, layout) {
+    var inset = layout.charCells * 0.1;
+    var inner = layout.charCells - 2 * inset;
+    if (inner < 0.01) inner = layout.charCells;
+    return {
+      gx: cell.col * layout.charCells + inset + nx * inner,
+      gy: cell.row * layout.charCells + inset + ny * inner
+    };
+  }
+
+  function textHasContent(layout) {
+    var i;
+    for (i = 0; i < layout.cells.length; i++) {
+      if (layout.cells[i].strokes && layout.cells[i].strokes.length) return true;
+    }
+    return false;
+  }
+
+  function textHasErrors(layout) {
+    if (glyphFetchError) return true;
+    if (layout.overflow) return true;
+    if (glyphMissing.length) return true;
+    var i;
+    for (i = 0; i < layout.cells.length; i++) {
+      if (layout.cells[i].missing) return true;
+    }
+    return false;
+  }
+
+  function updateTextError(layout) {
+    var parts = [];
+    if (glyphFetchError) {
+      parts.push(glyphFetchError);
+    } else if (glyphMissing.length) {
+      parts.push('No stroke data for: ' + glyphMissing.join(' '));
+    }
+    if (layout.overflow) {
+      parts.push('Text does not fit the drawing area.');
+    }
+    textErrorEl.textContent = parts.join(' ');
+  }
+
+  function scheduleGlyphFetch() {
+    if (glyphTimer) clearTimeout(glyphTimer);
+    glyphTimer = setTimeout(fetchGlyphs, 150);
+  }
+
+  function fetchGlyphs() {
+    var text = textInput.value || '';
+    var i, ch;
+    var chars = Array.from(text);
+    var need = [];
+    var seen = {};
+    for (i = 0; i < chars.length; i++) {
+      ch = chars[i];
+      if (ch === '\n' || ch === '\r' || WS.test(ch)) continue;
+      if (seen[ch]) continue;
+      seen[ch] = true;
+      need.push(ch);
+    }
+    if (!need.length) {
+      glyphReq += 1;
+      glyphMap = {};
+      glyphMissing = [];
+      glyphFetchError = '';
+      renderCanvas();
+      updateUI();
+      return;
+    }
+    var req = ++glyphReq;
+    ExtensionAPI.fetch('drawing', '/glyphs?text=' + encodeURIComponent(need.join('')))
+      .then(function (data) {
+        if (req !== glyphReq) return;
+        if (!data || !data.success) {
+          glyphFetchError = (data && data.error) || 'Cannot load character data.';
+          glyphMap = {};
+          glyphMissing = need.slice();
+        } else {
+          glyphFetchError = '';
+          glyphMap = data.glyphs || {};
+          glyphMissing = data.missing || [];
+        }
+        renderCanvas();
+        updateUI();
+      })
+      .catch(function () {
+        if (req !== glyphReq) return;
+        glyphFetchError = 'Cannot load character data.';
+        glyphMap = {};
+        glyphMissing = need.slice();
+        renderCanvas();
+        updateUI();
+      });
+  }
+
+  textInput.addEventListener('input', function () {
+    scheduleGlyphFetch();
+    renderCanvas();
+    updateUI();
+  });
+  textInput.addEventListener('focus', function () {
+    sizeWrap.classList.add('active');
+  });
+  textInput.addEventListener('blur', function () {
+    sizeWrap.classList.remove('active');
+  });
+  sizeInput.addEventListener('focus', function () {
+    sizeWrap.classList.add('active');
+  });
+  sizeInput.addEventListener('blur', function () {
+    if (document.activeElement !== textInput) sizeWrap.classList.remove('active');
+  });
+  function clampSizeInput() {
+    var gi = gridInfo();
+    var cap = Math.max(1, Math.min(gi.maxGx, gi.maxGy));
+    var n = parseInt(sizeInput.value, 10);
+    if (!isFinite(n) || n < 1) n = 1;
+    if (n > cap) n = cap;
+    if (String(n) !== sizeInput.value) sizeInput.value = n;
+  }
+
+  sizeInput.addEventListener('change', function () {
+    clampSizeInput();
+    renderCanvas();
+    updateUI();
+  });
+  sizeInput.addEventListener('input', function () {
+    renderCanvas();
+    updateUI();
+  });
 
   // ---- Canvas rendering --------------------------------------------------
 
@@ -94,84 +334,130 @@
     var h = canvas.height;
     if (w === 0 || h === 0) return;
     var gi = gridInfo();
+    var layout = layoutText(gi);
+    var i, j, p, cell, stroke, pt, px, py;
 
-    // Background
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, w, h);
 
-    // Grey out areas above and below the bounding box
+    ctx.fillStyle = 'rgba(0,0,0,0.04)';
     if (gi.oY > 0) {
-      ctx.fillStyle = 'rgba(0,0,0,0.04)';
       ctx.fillRect(0, 0, w, gi.oY);
       ctx.fillRect(0, gi.oY + gi.boxH, w, h - gi.oY - gi.boxH);
     }
+    if (gi.oX > 0) {
+      ctx.fillRect(0, gi.oY, gi.oX, gi.boxH);
+      ctx.fillRect(gi.oX + gi.boxW, gi.oY, w - gi.oX - gi.boxW, gi.boxH);
+    }
 
-    // Grid lines (inside bounding box only)
     var step = gi.res > 100 ? 5 : 1;
     ctx.strokeStyle = 'rgba(0,0,0,0.06)';
     ctx.lineWidth   = 0.5;
     for (var gx = 0; gx <= gi.maxGx; gx += step) {
-      var px = Math.round(gx * gi.cell) + 0.5;
+      px = Math.round(gi.oX + gx * gi.cell) + 0.5;
       ctx.beginPath();
       ctx.moveTo(px, gi.oY);
       ctx.lineTo(px, gi.oY + gi.boxH);
       ctx.stroke();
     }
     for (var gy = 0; gy <= gi.maxGy; gy += step) {
-      var py = Math.round(gi.oY + gy * gi.cell) + 0.5;
+      py = Math.round(gi.oY + gy * gi.cell) + 0.5;
       ctx.beginPath();
-      ctx.moveTo(0, py);
-      ctx.lineTo(gi.boxW, py);
+      ctx.moveTo(gi.oX, py);
+      ctx.lineTo(gi.oX + gi.boxW, py);
       ctx.stroke();
     }
 
-    // Bounding box — shows the calibration region (TL ↔ BR)
     ctx.strokeStyle = 'rgba(33,150,243,0.5)';
     ctx.lineWidth   = 2;
     ctx.setLineDash([6, 3]);
-    ctx.strokeRect(1, gi.oY + 1, gi.boxW - 2, gi.boxH - 2);
+    ctx.strokeRect(gi.oX + 1, gi.oY + 1, gi.boxW - 2, gi.boxH - 2);
     ctx.setLineDash([]);
 
-    // Collect all paths (including the one being drawn)
+    // Character cells
+    for (i = 0; i < layout.cells.length; i++) {
+      cell = layout.cells[i];
+      var x0 = gi.oX + cell.col * layout.charCells * gi.cell;
+      var y0 = gi.oY + cell.row * layout.charCells * gi.cell;
+      var side = layout.charCells * gi.cell;
+      if (cell.missing) {
+        ctx.strokeStyle = 'rgba(198,40,40,0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x0 + 1, y0 + 1, side - 2, side - 2);
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#c62828';
+        ctx.font = Math.max(10, Math.floor(side * 0.45)) + 'px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(cell.ch, x0 + side / 2, y0 + side / 2);
+        continue;
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0 + 0.5, y0 + 0.5, side - 1, side - 1);
+
+      if (!cell.strokes) continue;
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = Math.max(1.2, gi.cell * 0.12);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (j = 0; j < cell.strokes.length; j++) {
+        stroke = cell.strokes[j];
+        if (!stroke.length) continue;
+        ctx.beginPath();
+        pt = mapGlyphPoint(cell, stroke[0].x, stroke[0].y, layout);
+        ctx.moveTo(gi.oX + pt.gx * gi.cell, gi.oY + pt.gy * gi.cell);
+        for (p = 1; p < stroke.length; p++) {
+          pt = mapGlyphPoint(cell, stroke[p].x, stroke[p].y, layout);
+          ctx.lineTo(gi.oX + pt.gx * gi.cell, gi.oY + pt.gy * gi.cell);
+        }
+        ctx.stroke();
+      }
+    }
+
     var allPaths = paths.slice();
     if (currentPath && currentPath.length > 0) allPaths.push(currentPath);
 
-    // Draw paths — convert stored {gx, gy} grid indices to pixels
     ctx.strokeStyle = '#333';
     ctx.lineWidth   = 2;
     ctx.lineCap     = 'round';
     ctx.lineJoin    = 'round';
 
-    for (var i = 0; i < allPaths.length; i++) {
-      var p = allPaths[i];
+    for (i = 0; i < allPaths.length; i++) {
+      p = allPaths[i];
       if (p.length === 0) continue;
 
       if (p.length === 1) {
         ctx.fillStyle = '#333';
         ctx.beginPath();
-        ctx.arc(p[0].gx * gi.cell, gi.oY + p[0].gy * gi.cell, 2, 0, Math.PI * 2);
+        ctx.arc(gi.oX + p[0].gx * gi.cell, gi.oY + p[0].gy * gi.cell, 2, 0, Math.PI * 2);
         ctx.fill();
         continue;
       }
 
       ctx.beginPath();
-      ctx.moveTo(p[0].gx * gi.cell, gi.oY + p[0].gy * gi.cell);
-      for (var j = 1; j < p.length; j++) {
-        ctx.lineTo(p[j].gx * gi.cell, gi.oY + p[j].gy * gi.cell);
+      ctx.moveTo(gi.oX + p[0].gx * gi.cell, gi.oY + p[0].gy * gi.cell);
+      for (j = 1; j < p.length; j++) {
+        ctx.lineTo(gi.oX + p[j].gx * gi.cell, gi.oY + p[j].gy * gi.cell);
       }
       ctx.stroke();
     }
+
+    updateTextError(layout);
   }
 
-  resInput.addEventListener('change', renderCanvas);
+  resInput.addEventListener('change', function () {
+    renderCanvas();
+    updateUI();
+  });
 
   // ---- Canvas mouse handling ---------------------------------------------
 
-  /** Snap raw pixel coords to the nearest grid corner, return {gx, gy}. */
   function snapToGrid(rawPxX, rawPxY) {
     var gi = gridInfo();
     return {
-      gx: Math.min(gi.maxGx, Math.max(0, Math.round(rawPxX / gi.cell))),
+      gx: Math.min(gi.maxGx, Math.max(0, Math.round((rawPxX - gi.oX) / gi.cell))),
       gy: Math.min(gi.maxGy, Math.max(0, Math.round((rawPxY - gi.oY) / gi.cell)))
     };
   }
@@ -195,13 +481,9 @@
     var rawPxX = e.clientX - rect.left;
     var rawPxY = e.clientY - rect.top;
     var last = currentPath[currentPath.length - 1];
-    // Distance from last point in grid-cell units
-    var dxCells = rawPxX / gi.cell - last.gx;
+    var dxCells = (rawPxX - gi.oX) / gi.cell - last.gx;
     var dyCells = (rawPxY - gi.oY) / gi.cell - last.gy;
     var distCells = Math.sqrt(dxCells * dxCells + dyCells * dyCells);
-    // Wait until mouse is ≥ 0.9 cells from the last point.
-    // At 0.9, a 45° movement is at (0.64, 0.64) → rounds to (1,1) diagonal.
-    // Shallower angles (< ~34°) correctly round to the adjacent-axis cell.
     if (distCells < 0.9) return;
     var pos = snapToGrid(rawPxX, rawPxY);
     if (pos.gx === last.gx && pos.gy === last.gy) return;
@@ -238,7 +520,7 @@
     updateUI();
   });
 
-  // ---- Jog controls (same pattern as cv-pick) ----------------------------
+  // ---- Jog controls ------------------------------------------------------
 
   var jogStep = 5;
   var jogBusy = false;
@@ -285,7 +567,12 @@
     calibStatusEl.textContent = isCalibrated ? 'Calibrated' : 'Not calibrated';
     calibStatusEl.classList.toggle('calibrated', isCalibrated);
 
-    startBtn.disabled = !isCalibrated || paths.length === 0 || executing;
+    var gi = gridInfo();
+    var layout = layoutText(gi);
+    var hasText = textHasContent(layout);
+    var hasDraw = paths.length > 0;
+    var textErr = (textInput.value || '').replace(/\s/g, '').length > 0 && textHasErrors(layout);
+    startBtn.disabled = !isCalibrated || executing || (!hasDraw && !hasText) || textErr;
   }
 
   function recordCalibPoint(key) {
@@ -301,6 +588,7 @@
       };
       ExtensionAPI.setData('drawing', 'calibration', calib);
       updateUI();
+      renderCanvas();
       ExtensionAPI.showNotification(key.toUpperCase() + ' recorded: ' + fmtPos(calib[key]), 'info');
     });
   }
@@ -309,7 +597,14 @@
   document.getElementById('drawing-record-tr').addEventListener('click', function () { recordCalibPoint('tr'); });
   document.getElementById('drawing-record-br').addEventListener('click', function () { recordCalibPoint('br'); });
 
-  // Restore saved calibration
+  document.getElementById('drawing-clear-calib').addEventListener('click', function () {
+    calib = { tl: null, tr: null, br: null };
+    ExtensionAPI.setData('drawing', 'calibration', calib);
+    updateUI();
+    renderCanvas();
+    ExtensionAPI.showNotification('Calibration cleared', 'info');
+  });
+
   var saved = ExtensionAPI.getData('drawing', 'calibration');
   if (saved) { calib = saved; }
   updateUI();
@@ -335,8 +630,6 @@
   }
 
   // ---- Path interpolation ------------------------------------------------
-  // Resample a path so consecutive points are at most 1 grid cell apart,
-  // snapping every interpolated point to a grid corner and deduplicating.
 
   function interpolatePath(path) {
     if (path.length <= 1) return path.slice();
@@ -347,7 +640,7 @@
       var dgx  = curr.gx - prev.gx;
       var dgy  = curr.gy - prev.gy;
       var dist = Math.sqrt(dgx * dgx + dgy * dgy);
-      var steps = Math.max(1, Math.ceil(dist));  // 1 grid cell per step
+      var steps = Math.max(1, Math.ceil(dist));
       for (var s = 1; s <= steps; s++) {
         var t  = s / steps;
         var sx = Math.min(gi.maxGx, Math.max(0, prev.gx + dgx * t));
@@ -396,60 +689,90 @@
     progressEl.classList.toggle('running', !!msg);
   }
 
-  // ---- Execute drawing ---------------------------------------------------
+  function buildSegments() {
+    var gi = gridInfo();
+    var layout = layoutText(gi);
+    var segments = [];
+    var i, j, k, cell, stroke, pts, interp, totalChars, charIndex, pt;
 
-  startBtn.addEventListener('click', async function () {
-    if (!isCalibrated || paths.length === 0) return;
+    totalChars = 0;
+    for (i = 0; i < layout.cells.length; i++) {
+      if (layout.cells[i].strokes && layout.cells[i].strokes.length) totalChars += 1;
+    }
+    charIndex = 0;
+    for (i = 0; i < layout.cells.length; i++) {
+      cell = layout.cells[i];
+      if (!cell.strokes || !cell.strokes.length) continue;
+      charIndex += 1;
+      for (j = 0; j < cell.strokes.length; j++) {
+        stroke = cell.strokes[j];
+        pts = [];
+        for (k = 0; k < stroke.length; k++) {
+          pt = mapGlyphPoint(cell, stroke[k].x, stroke[k].y, layout);
+          pts.push(pt);
+        }
+        interp = interpolatePath(pts);
+        if (interp.length > 0) {
+          segments.push({
+            points: interp,
+            label: 'Character ' + charIndex + '/' + totalChars + ' ' + cell.ch
+                    + ' — stroke ' + (j + 1) + '/' + cell.strokes.length
+          });
+        }
+      }
+    }
 
+    for (i = 0; i < paths.length; i++) {
+      interp = interpolatePath(paths[i]);
+      if (interp.length > 0) {
+        segments.push({
+          points: interp,
+          label: 'Freehand ' + (i + 1) + '/' + paths.length
+        });
+      }
+    }
+    return segments;
+  }
+
+  async function runDrawing() {
     executing = true;
     aborted   = false;
     startBtn.disabled = true;
     stopBtn.disabled  = false;
 
-    var liftZ = 10; // mm above surface between segments
+    var liftZ = 10;
+    var segments = buildSegments();
+    var si, pi, seg, first, last, pt;
 
-    // Pre-interpolate all paths
-    var segments = [];
-    for (var i = 0; i < paths.length; i++) {
-      var interp = interpolatePath(paths[i]);
-      if (interp.length > 0) segments.push(interp);
-    }
-
-    for (var si = 0; si < segments.length; si++) {
+    for (si = 0; si < segments.length; si++) {
       if (aborted) break;
-      var seg = segments[si];
+      seg = segments[si];
 
-      setProgress('Segment ' + (si + 1) + '/' + segments.length + ' — moving to start');
+      setProgress(seg.label + ' — moving to start');
 
-      // Move above the first point (lift Z)
-      var first = canvasToRobot(seg[0].gx, seg[0].gy);
+      first = canvasToRobot(seg.points[0].gx, seg.points[0].gy);
       await cmdMove(first.x, first.y, first.z + liftZ);
       await waitIdle();
       if (aborted) break;
 
-      // Lower to drawing surface
       await cmdMove(first.x, first.y, first.z);
       await waitIdle();
       if (aborted) break;
 
-      // Trace each point
-      for (var pi = 1; pi < seg.length; pi++) {
+      for (pi = 1; pi < seg.points.length; pi++) {
         if (aborted) break;
-        var pt = canvasToRobot(seg[pi].gx, seg[pi].gy);
+        pt = canvasToRobot(seg.points[pi].gx, seg.points[pi].gy);
         await cmdMove(pt.x, pt.y, pt.z);
         await waitIdle();
-        setProgress('Segment ' + (si + 1) + '/' + segments.length
-                    + ' — point ' + pi + '/' + (seg.length - 1));
+        setProgress(seg.label + ' — point ' + pi + '/' + (seg.points.length - 1));
       }
       if (aborted) break;
 
-      // Lift after segment
-      var last = canvasToRobot(seg[seg.length - 1].gx, seg[seg.length - 1].gy);
+      last = canvasToRobot(seg.points[seg.points.length - 1].gx, seg.points[seg.points.length - 1].gy);
       await cmdMove(last.x, last.y, last.z + liftZ);
       await waitIdle();
     }
 
-    // Finished
     executing = false;
     stopBtn.disabled = true;
     updateUI();
@@ -458,9 +781,35 @@
       setProgress('Stopped');
       ExtensionAPI.showNotification('Drawing stopped', 'info');
     } else {
-      setProgress('Done! ' + segments.length + ' segment(s) drawn');
+      setProgress('Done! ' + segments.length + ' stroke(s) drawn');
       ExtensionAPI.showNotification('Drawing complete', 'info');
     }
+  }
+
+  function hideModal() {
+    modalEl.hidden = true;
+  }
+
+  function showModal() {
+    modalEl.hidden = false;
+  }
+
+  startBtn.addEventListener('click', function () {
+    if (!isCalibrated) return;
+    var gi = gridInfo();
+    var layout = layoutText(gi);
+    if (!paths.length && !textHasContent(layout)) return;
+    if ((textInput.value || '').replace(/\s/g, '').length > 0 && textHasErrors(layout)) return;
+    showModal();
+  });
+
+  modalCancel.addEventListener('click', hideModal);
+  modalEl.addEventListener('click', function (e) {
+    if (e.target === modalEl) hideModal();
+  });
+  modalConfirm.addEventListener('click', function () {
+    hideModal();
+    runDrawing();
   });
 
   stopBtn.addEventListener('click', function () {
