@@ -52,7 +52,7 @@
   position: absolute;
   box-sizing: border-box;
   pointer-events: auto;
-  border: 1px dashed rgba(33, 150, 243, 0.45);
+  border: 2px dashed rgba(33, 150, 243, 0.45);
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.12);
 }
@@ -83,18 +83,22 @@
   height: 100%;
   box-sizing: border-box;
   margin: 0;
-  padding: 0 2px;
+  padding: 0;
   border: none;
   resize: none;
   outline: none;
   background: transparent;
   color: transparent;
-  caret-color: var(--accent, #2196F3);
+  caret-color: transparent;
   font-family: inherit;
   overflow: hidden;
   word-break: break-all;
 }
 .drawing-text-item-input::placeholder {
+  color: transparent;
+}
+.drawing-text-item-input::selection {
+  background: transparent;
   color: transparent;
 }
 .drawing-text-item.selected .drawing-text-item-input {
@@ -148,6 +152,29 @@
   margin-top: 8px;
   flex-shrink: 0;
   flex-wrap: wrap;
+}
+
+.drawing-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.drawing-mode-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-primary, #333);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.drawing-mode-btn.active {
+  background: var(--accent, #2196F3);
+  color: #fff;
+}
+#drawing-canvas.erasing {
+  cursor: none;
 }
 
 /* resolution */
@@ -294,8 +321,12 @@
   line-height: 1;
   min-width: 24px;
 }
-.drawing-jog-btn:hover { background: var(--bg-tertiary, #e8e8e8); }
-.drawing-jog-btn:active { background: var(--accent, #2196F3); color: #fff; }
+.drawing-jog-btn:hover:not(:disabled) { background: var(--bg-tertiary, #e8e8e8); }
+.drawing-jog-btn:active:not(:disabled) { background: var(--accent, #2196F3); color: #fff; }
+.drawing-jog-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .drawing-jog-step-row {
   display: flex;
   align-items: center;
@@ -303,21 +334,18 @@
 }
 .drawing-jog-step-group {
   display: flex;
-  border: 1px solid var(--border-primary, #ccc);
-  border-radius: 4px;
-  overflow: hidden;
+  align-items: center;
+  gap: 4px;
 }
 .drawing-jog-step {
   padding: 3px 8px;
   border: none;
+  border-radius: 4px;
   background: var(--bg-secondary, #f5f5f5);
   color: var(--text-primary, #333);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-}
-.drawing-jog-step + .drawing-jog-step {
-  border-left: 1px solid var(--border-primary, #ccc);
 }
 .drawing-jog-step.active {
   background: var(--accent, #2196F3);
@@ -330,7 +358,6 @@
 
 /* ---- calibration ---- */
 .drawing-calib-section {
-  border-top: 1px solid var(--border-primary, #eee);
   padding-top: 12px;
 }
 .drawing-hint {

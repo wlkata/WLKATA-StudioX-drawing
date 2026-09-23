@@ -12,6 +12,8 @@
   var removeTextBtn = document.getElementById('drawing-remove-text');
   var sizeInput  = document.getElementById('drawing-char-size');
   var sizeWrap   = document.getElementById('drawing-size-wrap');
+  var eraserSizeInput = document.getElementById('drawing-eraser-size');
+  var eraserSizeWrap = document.getElementById('drawing-eraser-size-wrap');
   var textErrorEl = document.getElementById('drawing-text-error');
   var calibTLEl  = document.getElementById('drawing-calib-tl');
   var calibTREl  = document.getElementById('drawing-calib-tr');
@@ -31,6 +33,11 @@
   var paths       = [];
   var currentPath = null;
   var isDrawing   = false;
+  var toolMode    = 'draw';
+  var erasePos    = null;
+  var eraseDragging = false;
+  var eraseDidChange = false;
+  var undoStack   = [];
 
   var calib = { tl: null, tr: null, br: null };
   var isCalibrated = false;
@@ -42,6 +49,9 @@
   var selectedTextId = null;
   var nextTextId = 1;
   var textDrag = null;
+  var textSelDrag = null;
+  var caretTimer = null;
+  var lastGrid = null;
 
   var glyphMap = {};
   var glyphMissing = [];
@@ -68,11 +78,13 @@
       });
       if (prev) deviceSelect.value = prev;
       selectedPort = deviceSelect.value || null;
+      updateUI();
     }).catch(function () {});
   }
 
   deviceSelect.addEventListener('change', function () {
     selectedPort = deviceSelect.value || null;
+    updateUI();
   });
   deviceRefresh.addEventListener('click', loadDevices);
   loadDevices();
@@ -106,7 +118,8 @@
 
   function gridInfo() {
     var res = parseInt(resInput.value, 10) || 50;
-    if (res < 1) res = 1;
+    if (res < 10) res = 10;
+    if (res > 80) res = 80;
     var w = canvas.width;
     var h = canvas.height;
     var aspect = paperAspect();
@@ -125,6 +138,56 @@
     var oY = (h - boxH) / 2;
     return { res: res, cell: cell, maxGx: maxGx, maxGy: maxGy,
              boxW: boxW, boxH: boxH, oX: oX, oY: oY };
+  }
+
+  function remapStoredGeometry(gi) {
+    if (!gi || !gi.maxGx || !gi.maxGy) return;
+    if (!lastGrid) {
+      lastGrid = { maxGx: gi.maxGx, maxGy: gi.maxGy };
+      return;
+    }
+    if (lastGrid.maxGx === gi.maxGx && lastGrid.maxGy === gi.maxGy) return;
+
+    var sx = gi.maxGx / lastGrid.maxGx;
+    var sy = gi.maxGy / lastGrid.maxGy;
+
+    function mapPt(p) {
+      return {
+        gx: Math.min(gi.maxGx, Math.max(0, p.gx * sx)),
+        gy: Math.min(gi.maxGy, Math.max(0, p.gy * sy))
+      };
+    }
+
+    var i, j, f;
+    for (i = 0; i < paths.length; i++) {
+      for (j = 0; j < paths[i].length; j++) {
+        paths[i][j] = mapPt(paths[i][j]);
+      }
+    }
+    if (currentPath) {
+      for (j = 0; j < currentPath.length; j++) {
+        currentPath[j] = mapPt(currentPath[j]);
+      }
+    }
+    for (i = 0; i < undoStack.length; i++) {
+      for (j = 0; j < undoStack[i].length; j++) {
+        var snapPath = undoStack[i][j];
+        var k;
+        for (k = 0; k < snapPath.length; k++) {
+          snapPath[k] = mapPt(snapPath[k]);
+        }
+      }
+    }
+    for (i = 0; i < textFields.length; i++) {
+      f = textFields[i];
+      f.gx = Math.min(gi.maxGx, Math.max(0, f.gx * sx));
+      f.gy = Math.min(gi.maxGy, Math.max(0, f.gy * sy));
+      f.size = clampSize(Math.max(1, Math.round(f.size * sx)), gi);
+    }
+    lastGrid = { maxGx: gi.maxGx, maxGy: gi.maxGy };
+
+    var sel = selectedField();
+    if (sel && !sizeInput.disabled) sizeInput.value = String(sel.size);
   }
 
   function clampSize(n, gi) {
@@ -219,6 +282,89 @@
       usedCols: usedCols,
       usedRows: usedRows
     };
+  }
+
+  function walkLayout(field, gi) {
+    var charCells = clampSize(field.size, gi);
+    var cols = Math.floor((gi.maxGx - field.gx) / charCells);
+    var rows = Math.floor((gi.maxGy - field.gy) / charCells);
+    if (cols < 0) cols = 0;
+    if (rows < 0) rows = 0;
+    var text = field.text || '';
+    var col = 0;
+    var row = 0;
+    var carets = [{ col: 0, row: 0 }];
+    var occupied = [];
+    var i, ch;
+
+    function advance() {
+      col += 1;
+      if (cols > 0 && col >= cols) {
+        col = 0;
+        row += 1;
+      }
+    }
+
+    for (i = 0; i < text.length; i++) {
+      ch = text.charAt(i);
+      if (ch === '\r') {
+        carets.push({ col: col, row: row });
+        continue;
+      }
+      if (ch === '\n') {
+        col = 0;
+        row += 1;
+        carets.push({ col: col, row: row });
+        continue;
+      }
+      occupied.push({ index: i, col: col, row: row, ch: ch });
+      advance();
+      carets.push({ col: col, row: row });
+    }
+    return {
+      charCells: charCells,
+      cols: cols,
+      rows: rows,
+      carets: carets,
+      occupied: occupied
+    };
+  }
+
+  function localInItem(el, e) {
+    var r = el.getBoundingClientRect();
+    var cs = window.getComputedStyle(el);
+    return {
+      x: e.clientX - r.left - (parseFloat(cs.borderLeftWidth) || 0),
+      y: e.clientY - r.top - (parseFloat(cs.borderTopWidth) || 0)
+    };
+  }
+
+  function indexFromLocalPoint(field, gi, localX, localY) {
+    var walk = walkLayout(field, gi);
+    var side = walk.charCells * gi.cell;
+    if (side <= 0) return 0;
+    var col = Math.floor(localX / side);
+    var row = Math.floor(localY / side);
+    var frac = localX / side - col;
+    var i, occ, lastOnRow = null, firstOnRow = null;
+    for (i = 0; i < walk.occupied.length; i++) {
+      occ = walk.occupied[i];
+      if (occ.col === col && occ.row === row) {
+        return frac < 0.5 ? occ.index : occ.index + 1;
+      }
+      if (occ.row === row) {
+        if (!firstOnRow) firstOnRow = occ;
+        lastOnRow = occ;
+      }
+    }
+    if (lastOnRow && col > lastOnRow.col) return lastOnRow.index + 1;
+    if (firstOnRow) return firstOnRow.index;
+    if (row > 0) {
+      for (i = walk.occupied.length - 1; i >= 0; i--) {
+        if (walk.occupied[i].row < row) return walk.occupied[i].index + 1;
+      }
+    }
+    return (field.text || '').length;
   }
 
   function layoutAll(gi) {
@@ -411,6 +557,17 @@
       if (e.target === bar) {
         e.preventDefault();
         startTextDrag(field, e);
+      } else if (e.target === ta && !e.isComposing) {
+        e.preventDefault();
+        ta.focus();
+        var gi = gridInfo();
+        var pt = localInItem(el, e);
+        var idx = indexFromLocalPoint(field, gi, pt.x, pt.y);
+        ta.setSelectionRange(idx, idx);
+        textSelDrag = { field: field, ta: ta, el: el, anchor: idx };
+        document.addEventListener('mousemove', onTextSelMove);
+        document.addEventListener('mouseup', onTextSelEnd);
+        renderCanvas();
       }
       e.stopPropagation();
     });
@@ -420,8 +577,15 @@
       renderCanvas();
       updateUI();
     });
+    ta.addEventListener('keyup', function () { renderCanvas(); });
+    ta.addEventListener('select', function () { renderCanvas(); });
     ta.addEventListener('focus', function () {
       selectTextField(field.id);
+      startCaretBlink();
+    });
+    ta.addEventListener('blur', function () {
+      stopCaretBlink();
+      renderCanvas();
     });
     return el;
   }
@@ -463,6 +627,41 @@
     updateUI();
   }
 
+  function onTextSelMove(e) {
+    if (!textSelDrag) return;
+    var gi = gridInfo();
+    var pt = localInItem(textSelDrag.el, e);
+    var idx = indexFromLocalPoint(textSelDrag.field, gi, pt.x, pt.y);
+    var a = textSelDrag.anchor;
+    if (idx < a) textSelDrag.ta.setSelectionRange(idx, a);
+    else textSelDrag.ta.setSelectionRange(a, idx);
+    renderCanvas();
+  }
+
+  function onTextSelEnd() {
+    textSelDrag = null;
+    document.removeEventListener('mousemove', onTextSelMove);
+    document.removeEventListener('mouseup', onTextSelEnd);
+  }
+
+  function startCaretBlink() {
+    if (caretTimer) return;
+    caretTimer = setInterval(function () {
+      var f = selectedField();
+      if (!f) { stopCaretBlink(); return; }
+      var el = textLayer.querySelector('[data-text-id="' + f.id + '"]');
+      var ta = el && el.querySelector('textarea');
+      if (!ta || document.activeElement !== ta) { stopCaretBlink(); return; }
+      renderCanvas();
+    }, 500);
+  }
+
+  function stopCaretBlink() {
+    if (!caretTimer) return;
+    clearInterval(caretTimer);
+    caretTimer = null;
+  }
+
   function syncTextOverlays() {
     var gi = gridInfo();
     if (!gi.cell) return;
@@ -487,8 +686,9 @@
         if (document.activeElement !== ta && ta.value !== (field.text || '')) {
           ta.value = field.text || '';
         }
-        ta.style.fontSize = Math.max(10, side * 0.72) + 'px';
+        ta.style.fontSize = side + 'px';
         ta.style.lineHeight = side + 'px';
+        ta.style.letterSpacing = '0px';
       }
     }
     var nodes = textLayer.querySelectorAll('.drawing-text-item');
@@ -529,6 +729,7 @@
     var h = canvas.height;
     if (w === 0 || h === 0) return;
     var gi = gridInfo();
+    remapStoredGeometry(gi);
     var layouts = layoutAll(gi);
     var i, j, p, cell, stroke, pt, px, py, layout, field, x0, y0, side;
 
@@ -568,6 +769,8 @@
     ctx.setLineDash([6, 3]);
     ctx.strokeRect(gi.oX + 1, gi.oY + 1, gi.boxW - 2, gi.boxH - 2);
     ctx.setLineDash([]);
+
+    drawTextSelection(gi);
 
     for (i = 0; i < layouts.length; i++) {
       layout = layouts[i];
@@ -639,11 +842,102 @@
       ctx.stroke();
     }
 
+    drawEraseHover(gi);
+    drawTextCaret(gi);
     syncTextOverlays();
     updateTextError(layouts);
   }
 
+  function eraserSizePx() {
+    var n = parseInt(eraserSizeInput.value, 10);
+    if (!isFinite(n) || n < 2) n = 2;
+    if (n > 80) n = 80;
+    return n;
+  }
+
+  function eraserHalfGrid(gi) {
+    return (eraserSizePx() / 2) / gi.cell;
+  }
+
+  function drawEraseHover(gi) {
+    if (toolMode !== 'erase' || !erasePos) return;
+    var side = eraserSizePx();
+    var cx = gi.oX + erasePos.gx * gi.cell;
+    var cy = gi.oY + erasePos.gy * gi.cell;
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.fillRect(cx - side / 2, cy - side / 2, side, side);
+    ctx.strokeRect(cx - side / 2 + 0.5, cy - side / 2 + 0.5, side - 1, side - 1);
+  }
+
+  function selectedTextarea() {
+    var field = selectedField();
+    if (!field) return null;
+    var el = textLayer.querySelector('[data-text-id="' + field.id + '"]');
+    return el ? el.querySelector('textarea') : null;
+  }
+
+  function drawTextSelection(gi) {
+    var field = selectedField();
+    var ta = selectedTextarea();
+    if (!field || !ta) return;
+    var a = ta.selectionStart;
+    var b = ta.selectionEnd;
+    if (a === b) return;
+    var lo = Math.min(a, b);
+    var hi = Math.max(a, b);
+    var walk = walkLayout(field, gi);
+    var side = walk.charCells * gi.cell;
+    var i, occ, x0, y0;
+    ctx.fillStyle = 'rgba(33,150,243,0.28)';
+    for (i = 0; i < walk.occupied.length; i++) {
+      occ = walk.occupied[i];
+      if (occ.index >= lo && occ.index < hi) {
+        x0 = gi.oX + (field.gx + occ.col * walk.charCells) * gi.cell;
+        y0 = gi.oY + (field.gy + occ.row * walk.charCells) * gi.cell;
+        ctx.fillRect(x0, y0, side, side);
+      }
+    }
+  }
+
+  function drawTextCaret(gi) {
+    var field = selectedField();
+    var ta = selectedTextarea();
+    if (!field || !ta || document.activeElement !== ta) return;
+    if (ta.selectionStart !== ta.selectionEnd) return;
+    if ((Date.now() % 1000) >= 530) return;
+    var walk = walkLayout(field, gi);
+    var side = walk.charCells * gi.cell;
+    var caret = walk.carets[ta.selectionStart] || walk.carets[walk.carets.length - 1];
+    if (!caret) return;
+    var x0 = gi.oX + (field.gx + caret.col * walk.charCells) * gi.cell;
+    var y0 = gi.oY + (field.gy + caret.row * walk.charCells) * gi.cell;
+    ctx.strokeStyle = '#2196F3';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x0 + 1, y0 + 2);
+    ctx.lineTo(x0 + 1, y0 + side - 2);
+    ctx.stroke();
+  }
+
+  function clampResolutionInput() {
+    var n = parseInt(resInput.value, 10);
+    if (!isFinite(n) || n < 10) n = 10;
+    if (n > 80) n = 80;
+    if (String(n) !== resInput.value) resInput.value = n;
+  }
+
   resInput.addEventListener('change', function () {
+    clampResolutionInput();
+    renderCanvas();
+    updateUI();
+  });
+  resInput.addEventListener('blur', clampResolutionInput);
+  resInput.addEventListener('input', function () {
+    var n = parseInt(resInput.value, 10);
+    if (isFinite(n) && n > 80) clampResolutionInput();
     renderCanvas();
     updateUI();
   });
@@ -663,15 +957,182 @@
     return snapToGrid(e.clientX - rect.left, e.clientY - rect.top);
   }
 
+  function rawGridPos(e) {
+    var gi = gridInfo();
+    var rect = canvas.getBoundingClientRect();
+    return {
+      gx: (e.clientX - rect.left - gi.oX) / gi.cell,
+      gy: (e.clientY - rect.top - gi.oY) / gi.cell
+    };
+  }
+
+  function pointInEraser(p, cx, cy, half) {
+    return Math.abs(p.gx - cx) <= half && Math.abs(p.gy - cy) <= half;
+  }
+
+  function segHitsEraser(a, b, cx, cy, half) {
+    var minX = cx - half, maxX = cx + half, minY = cy - half, maxY = cy + half;
+    var dx = b.gx - a.gx, dy = b.gy - a.gy;
+    var t0 = 0, t1 = 1;
+    function clip(p, q) {
+      if (Math.abs(p) < 1e-12) return q >= 0;
+      var r = q / p;
+      if (p < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+      return true;
+    }
+    if (!clip(-dx, a.gx - minX)) return false;
+    if (!clip(dx, maxX - a.gx)) return false;
+    if (!clip(-dy, a.gy - minY)) return false;
+    if (!clip(dy, maxY - a.gy)) return false;
+    return true;
+  }
+
+  function eraseAtSquare(cx, cy, half) {
+    var next = [];
+    var pi, i, path, keepV, keepE, run;
+    for (pi = 0; pi < paths.length; pi++) {
+      path = paths[pi];
+      keepV = [];
+      for (i = 0; i < path.length; i++) {
+        keepV[i] = !pointInEraser(path[i], cx, cy, half);
+      }
+      keepE = [];
+      for (i = 0; i < path.length - 1; i++) {
+        if (!keepV[i] || !keepV[i + 1]) {
+          keepE[i] = false;
+        } else if (segHitsEraser(path[i], path[i + 1], cx, cy, half)) {
+          keepE[i] = false;
+        } else {
+          keepE[i] = true;
+        }
+      }
+      i = 0;
+      while (i < path.length) {
+        if (!keepV[i]) {
+          i += 1;
+          continue;
+        }
+        run = [{ gx: path[i].gx, gy: path[i].gy }];
+        while (i < path.length - 1 && keepE[i] && keepV[i + 1]) {
+          i += 1;
+          run.push({ gx: path[i].gx, gy: path[i].gy });
+        }
+        next.push(run);
+        i += 1;
+      }
+    }
+    return next;
+  }
+
+  function pathsUnchanged(a, b) {
+    if (a.length !== b.length) return false;
+    var i, j;
+    for (i = 0; i < a.length; i++) {
+      if (a[i].length !== b[i].length) return false;
+      for (j = 0; j < a[i].length; j++) {
+        if (a[i][j].gx !== b[i][j].gx || a[i][j].gy !== b[i][j].gy) return false;
+      }
+    }
+    return true;
+  }
+
+  function applyEraserAt(pos) {
+    var half = eraserHalfGrid(gridInfo());
+    var next = eraseAtSquare(pos.gx, pos.gy, half);
+    if (pathsUnchanged(paths, next)) return;
+    if (!eraseDidChange) {
+      snapshotPaths();
+      eraseDidChange = true;
+    }
+    paths = next;
+  }
+
+  function clonePaths(src) {
+    return src.map(function (path) {
+      return path.map(function (pt) { return { gx: pt.gx, gy: pt.gy }; });
+    });
+  }
+
+  function snapshotPaths() {
+    undoStack.push(clonePaths(paths));
+    if (undoStack.length > 80) undoStack.shift();
+  }
+
+  function setToolMode(mode) {
+    toolMode = mode;
+    erasePos = null;
+    eraseDragging = false;
+    isDrawing = false;
+    currentPath = null;
+    canvas.classList.toggle('erasing', mode === 'erase');
+    document.getElementById('drawing-mode-draw').classList.toggle('active', mode === 'draw');
+    document.getElementById('drawing-mode-erase').classList.toggle('active', mode === 'erase');
+    eraserSizeInput.disabled = mode !== 'erase' || executing;
+    eraserSizeWrap.classList.toggle('active', mode === 'erase');
+    renderCanvas();
+  }
+
+  document.getElementById('drawing-mode-draw').addEventListener('click', function () {
+    setToolMode('draw');
+  });
+  document.getElementById('drawing-mode-erase').addEventListener('click', function () {
+    setToolMode('erase');
+  });
+
+  eraserSizeInput.addEventListener('change', function () {
+    var n = parseInt(eraserSizeInput.value, 10);
+    if (!isFinite(n) || n < 2) n = 2;
+    if (n > 80) n = 80;
+    eraserSizeInput.value = n;
+    renderCanvas();
+  });
+
+  function onEraseMove(e) {
+    if (toolMode !== 'erase' || executing) return;
+    erasePos = rawGridPos(e);
+    if (eraseDragging) applyEraserAt(erasePos);
+    renderCanvas();
+    if (eraseDragging) updateUI();
+  }
+
+  function stopEraseDrag() {
+    if (!eraseDragging) return;
+    eraseDragging = false;
+    document.removeEventListener('mousemove', onEraseMove);
+    document.removeEventListener('mouseup', stopEraseDrag);
+    updateUI();
+  }
+
   canvas.addEventListener('mousedown', function (e) {
     if (executing) return;
     selectTextField(null);
+    if (toolMode === 'erase') {
+      erasePos = rawGridPos(e);
+      eraseDragging = true;
+      eraseDidChange = false;
+      applyEraserAt(erasePos);
+      document.addEventListener('mousemove', onEraseMove);
+      document.addEventListener('mouseup', stopEraseDrag);
+      renderCanvas();
+      updateUI();
+      return;
+    }
     isDrawing   = true;
     currentPath = [canvasPos(e)];
     renderCanvas();
   });
 
   canvas.addEventListener('mousemove', function (e) {
+    if (toolMode === 'erase') {
+      onEraseMove(e);
+      return;
+    }
     if (!isDrawing || !currentPath) return;
     var gi   = gridInfo();
     var rect = canvas.getBoundingClientRect();
@@ -691,28 +1152,45 @@
   function finishStroke() {
     if (!isDrawing || !currentPath) return;
     isDrawing = false;
-    if (currentPath.length > 0) paths.push(currentPath);
+    if (currentPath.length > 0) {
+      snapshotPaths();
+      paths.push(currentPath);
+    }
     currentPath = null;
     renderCanvas();
     updateUI();
   }
 
-  canvas.addEventListener('mouseup',    finishStroke);
-  canvas.addEventListener('mouseleave', finishStroke);
+  canvas.addEventListener('mouseup', finishStroke);
+  canvas.addEventListener('mouseleave', function () {
+    if (toolMode === 'erase') {
+      if (!eraseDragging) {
+        erasePos = null;
+        renderCanvas();
+      }
+      return;
+    }
+    finishStroke();
+  });
 
   // ---- Undo / Clear ------------------------------------------------------
 
   undoBtn.addEventListener('click', function () {
-    if (paths.length > 0) {
-      paths.pop();
-      renderCanvas();
-      updateUI();
-    }
+    if (!undoStack.length || executing) return;
+    paths = undoStack.pop();
+    erasePos = eraseDragging ? erasePos : null;
+    currentPath = null;
+    isDrawing = false;
+    renderCanvas();
+    updateUI();
   });
 
   clearBtn.addEventListener('click', function () {
+    if (executing) return;
+    if (paths.length) snapshotPaths();
     paths       = [];
     currentPath = null;
+    if (!eraseDragging) erasePos = null;
     renderCanvas();
     updateUI();
   });
@@ -734,7 +1212,7 @@
   var jogBtns = document.querySelectorAll('.drawing-jog-btn');
   for (var ji = 0; ji < jogBtns.length; ji++) {
     jogBtns[ji].addEventListener('click', function () {
-      if (jogBusy) return;
+      if (jogBusy || !selectedPort) return;
       var axis = this.getAttribute('data-axis').toUpperCase();
       var dir  = parseInt(this.getAttribute('data-dir'), 10);
       jogBusy  = true;
@@ -769,9 +1247,18 @@
     var hasText = textHasContent(layouts);
     var hasDraw = paths.length > 0;
     var textErr = textHasTypedChars() && textHasErrors(layouts);
-    startBtn.disabled = !isCalibrated || executing || (!hasDraw && !hasText) || textErr;
+    startBtn.disabled = !selectedPort || !isCalibrated || executing || (!hasDraw && !hasText) || textErr;
     addTextBtn.disabled = executing;
     removeTextBtn.disabled = executing || selectedTextId == null;
+    undoBtn.disabled = executing || undoStack.length === 0;
+    document.getElementById('drawing-mode-draw').disabled = executing;
+    document.getElementById('drawing-mode-erase').disabled = executing;
+    eraserSizeInput.disabled = executing || toolMode !== 'erase';
+    eraserSizeWrap.classList.toggle('active', toolMode === 'erase');
+    var jogOn = !!selectedPort && !executing;
+    var jogBtnsUI = document.querySelectorAll('.drawing-jog-btn');
+    var jb;
+    for (jb = 0; jb < jogBtnsUI.length; jb++) jogBtnsUI[jb].disabled = !jogOn;
   }
 
   function recordCalibPoint(key) {
@@ -852,10 +1339,14 @@
     return new Promise(function (r) { setTimeout(r, ms); });
   }
 
+  function round2(n) {
+    return Math.round(Number(n) * 100) / 100;
+  }
+
   function cmdMove(x, y, z) {
     var body = {
       mode: 'coord', motion: 1,
-      values: { x: x, y: y, z: z },
+      values: { x: round2(x), y: round2(y), z: round2(z) },
       isAbsolute: true
     };
     if (selectedPort) body.port = selectedPort;
@@ -938,6 +1429,7 @@
     stopBtn.disabled  = false;
     addTextBtn.disabled = true;
     removeTextBtn.disabled = true;
+    undoBtn.disabled = true;
 
     var liftZ = 10;
     var segments = buildSegments();
@@ -994,7 +1486,7 @@
   }
 
   startBtn.addEventListener('click', function () {
-    if (!isCalibrated) return;
+    if (!selectedPort || !isCalibrated) return;
     var gi = gridInfo();
     var layouts = layoutAll(gi);
     if (!paths.length && !textHasContent(layouts)) return;

@@ -6,6 +6,14 @@
     </div>
     <div id="drawing-text-error" class="drawing-text-error"></div>
     <div class="drawing-toolbar">
+      <div class="drawing-mode-toggle">
+        <button id="drawing-mode-draw" class="drawing-mode-btn active">Draw</button>
+        <button id="drawing-mode-erase" class="drawing-mode-btn">Erase</button>
+      </div>
+      <label id="drawing-eraser-size-wrap" class="drawing-size-row" for="drawing-eraser-size">
+        <span class="drawing-toolbar-label">Eraser</span>
+        <input id="drawing-eraser-size" type="number" value="8" min="2" max="80" step="1" disabled />
+      </label>
       <button id="drawing-add-text" class="drawing-btn-secondary">Add text</button>
       <button id="drawing-remove-text" class="drawing-btn-secondary" disabled>Remove</button>
       <label id="drawing-size-wrap" class="drawing-size-row" for="drawing-char-size">
@@ -14,7 +22,7 @@
       </label>
       <div class="drawing-res-row">
         <span class="drawing-toolbar-label">Resolution</span>
-        <input id="drawing-resolution" type="number" value="50" min="10" max="500" step="5" />
+        <input id="drawing-resolution" type="number" value="50" min="10" max="80" step="5" />
       </div>
       <div class="drawing-canvas-btns">
         <button id="drawing-undo" class="drawing-btn-secondary">Undo</button>
