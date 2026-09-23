@@ -2,7 +2,7 @@
   "name": "drawing",
   "displayName": "Drawing",
   "version": "1.0.0",
-  "description": "Draw freehand paths on a canvas and replay them with the robotic arm.",
+  "description": "Draw freehand paths or Chinese characters and replay them with the robotic arm.",
   "contributes": {
     "sidebarTab": {
       "id": "drawing",
@@ -11,6 +11,9 @@
       "html": "frontend/tab.html",
       "js": "frontend/tab.js",
       "css": "frontend/tab.css"
+    },
+    "backend": {
+      "main": "backend/main.py"
     }
   }
 }

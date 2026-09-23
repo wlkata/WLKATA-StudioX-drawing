@@ -7,6 +7,7 @@
   padding: 16px;
   box-sizing: border-box;
   overflow: hidden;
+  position: relative;
 }
 
 /* ---- two-column layout ---- */
@@ -29,7 +30,7 @@
   flex: 1;
   min-height: 200px;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--border-primary, #ccc);
   background: #fff;
   position: relative;
@@ -39,6 +40,121 @@
   width: 100%;
   height: 100%;
   cursor: crosshair;
+}
+
+.drawing-text-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.drawing-text-item {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  border: 2px dashed rgba(33, 150, 243, 0.45);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.drawing-text-item.selected {
+  border: 2px solid var(--accent, #2196F3);
+  background: rgba(33, 150, 243, 0.08);
+  z-index: 3;
+}
+.drawing-text-item-bar {
+  position: absolute;
+  top: -14px;
+  left: 0;
+  right: 0;
+  height: 14px;
+  border-radius: 4px 4px 0 0;
+  background: rgba(33, 150, 243, 0.45);
+  cursor: grab;
+}
+.drawing-text-item.selected .drawing-text-item-bar {
+  background: var(--accent, #2196F3);
+}
+.drawing-text-item-bar:active {
+  cursor: grabbing;
+}
+.drawing-text-item-resize {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 2;
+}
+.drawing-text-item.selected .drawing-text-item-resize {
+  background: rgba(33, 150, 243, 0.4);
+  border-radius: 2px;
+}
+.drawing-text-item-input {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  resize: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-family: inherit;
+  overflow: hidden;
+  word-break: break-all;
+}
+.drawing-text-item-input::placeholder {
+  color: transparent;
+}
+.drawing-text-item-input::selection {
+  background: transparent;
+  color: transparent;
+}
+.drawing-text-item.selected .drawing-text-item-input {
+  color: transparent;
+}
+
+.drawing-size-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.drawing-size-row.active {
+  border-color: var(--accent, #2196F3);
+  background: var(--bg-secondary, #f5f5f5);
+}
+.drawing-size-row input {
+  width: 52px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+}
+.drawing-size-row input:focus {
+  border-color: var(--accent, #2196F3);
+}
+.drawing-size-row input:disabled {
+  opacity: 0.45;
+}
+.drawing-text-error {
+  min-height: 16px;
+  margin-top: 6px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #c62828;
+  line-height: 1.4;
 }
 
 /* ---- toolbar below canvas ---- */
@@ -51,33 +167,27 @@
   flex-wrap: wrap;
 }
 
-/* mode toggle */
 .drawing-mode-toggle {
   display: flex;
-  border: 1px solid var(--border-primary, #ccc);
-  border-radius: 6px;
-  overflow: hidden;
+  align-items: center;
+  gap: 6px;
 }
 .drawing-mode-btn {
-  padding: 5px 14px;
+  padding: 5px 12px;
   border: none;
+  border-radius: 6px;
   background: var(--bg-secondary, #f5f5f5);
   color: var(--text-primary, #333);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.drawing-mode-btn + .drawing-mode-btn {
-  border-left: 1px solid var(--border-primary, #ccc);
 }
 .drawing-mode-btn.active {
   background: var(--accent, #2196F3);
   color: #fff;
 }
-.drawing-mode-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+#drawing-canvas.erasing {
+  cursor: none;
 }
 
 /* resolution */
@@ -90,6 +200,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--text-primary, #333);
+  white-space: nowrap;
 }
 .drawing-res-row input {
   width: 60px;
@@ -224,8 +335,12 @@
   line-height: 1;
   min-width: 24px;
 }
-.drawing-jog-btn:hover { background: var(--bg-tertiary, #e8e8e8); }
-.drawing-jog-btn:active { background: var(--accent, #2196F3); color: #fff; }
+.drawing-jog-btn:hover:not(:disabled) { background: var(--bg-tertiary, #e8e8e8); }
+.drawing-jog-btn:active:not(:disabled) { background: var(--accent, #2196F3); color: #fff; }
+.drawing-jog-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .drawing-jog-step-row {
   display: flex;
   align-items: center;
@@ -233,21 +348,18 @@
 }
 .drawing-jog-step-group {
   display: flex;
-  border: 1px solid var(--border-primary, #ccc);
-  border-radius: 4px;
-  overflow: hidden;
+  align-items: center;
+  gap: 4px;
 }
 .drawing-jog-step {
   padding: 3px 8px;
   border: none;
+  border-radius: 4px;
   background: var(--bg-secondary, #f5f5f5);
   color: var(--text-primary, #333);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-}
-.drawing-jog-step + .drawing-jog-step {
-  border-left: 1px solid var(--border-primary, #ccc);
 }
 .drawing-jog-step.active {
   background: var(--accent, #2196F3);
@@ -260,7 +372,6 @@
 
 /* ---- calibration ---- */
 .drawing-calib-section {
-  border-top: 1px solid var(--border-primary, #eee);
   padding-top: 12px;
 }
 .drawing-hint {
@@ -319,6 +430,11 @@
   color: #43a047;
   font-weight: 600;
 }
+.drawing-calib-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
 
 /* ---- execute section ---- */
 .drawing-exec-section {
@@ -327,10 +443,17 @@
 }
 .drawing-exec-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 .drawing-exec-actions .drawing-btn-primary { flex: 1; }
 .drawing-exec-actions .drawing-btn-secondary { flex-shrink: 0; }
+.drawing-move-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  white-space: nowrap;
+}
 .drawing-progress {
   margin-top: 8px;
   font-size: 11px;
@@ -340,4 +463,108 @@
 .drawing-progress.running {
   color: var(--accent, #2196F3);
   font-weight: 600;
+}
+
+/* ---- confirm modal ---- */
+.drawing-modal {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 16px;
+}
+.drawing-modal[hidden] {
+  display: none;
+}
+.drawing-charset-section {
+  border-top: 1px solid var(--border-primary, #eee);
+  padding-top: 12px;
+}
+.drawing-charset-card {
+  width: min(400px, calc(100% - 24px));
+  max-height: min(80vh, 560px);
+  overflow: auto;
+  box-sizing: border-box;
+}
+.drawing-charset-meta {
+  font-size: 12px;
+  color: #c62828;
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.drawing-charset-meta:empty {
+  display: none;
+}
+.drawing-charset-heading {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary, #666);
+}
+.drawing-charset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 24px;
+}
+.drawing-charset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+.drawing-charset-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawing-charset-row .drawing-charset-note {
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-size: 11px;
+  color: var(--text-muted, #999);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawing-charset-row button {
+  flex-shrink: 0;
+}
+.drawing-charset-empty {
+  font-size: 12px;
+  color: var(--text-muted, #999);
+  padding: 4px 2px;
+}
+.drawing-modal-card {
+  width: min(420px, 100%);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+}
+.drawing-modal-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.drawing-modal-body {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #666);
+}
+.drawing-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
