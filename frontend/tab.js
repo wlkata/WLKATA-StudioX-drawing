@@ -1399,6 +1399,39 @@
     return result;
   }
 
+  function simplifyCollinear(points) {
+    if (!points || points.length <= 2) return points ? points.slice() : [];
+    var out = [points[0]];
+    var i, a, b, c, dx1, dy1, dx2, dy2, len1, len2, cross, dot;
+    for (i = 1; i < points.length - 1; i++) {
+      a = out[out.length - 1];
+      b = points[i];
+      c = points[i + 1];
+      dx1 = b.gx - a.gx;
+      dy1 = b.gy - a.gy;
+      len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+      if (len1 < 1e-9) continue;
+      dx2 = c.gx - b.gx;
+      dy2 = c.gy - b.gy;
+      len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+      if (len2 < 1e-9) continue;
+      cross = dx1 * dy2 - dy1 * dx2;
+      dot = dx1 * dx2 + dy1 * dy2;
+      if (Math.abs(cross) <= 1e-6 * len1 * len2 && dot > 0) continue;
+      out.push(b);
+    }
+    var last = points[points.length - 1];
+    var prev = out[out.length - 1];
+    if (Math.abs(last.gx - prev.gx) > 1e-9 || Math.abs(last.gy - prev.gy) > 1e-9) {
+      out.push(last);
+    }
+    return out;
+  }
+
+  function preparePath(path) {
+    return simplifyCollinear(interpolatePath(path));
+  }
+
   function sleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
   }
@@ -1462,7 +1495,7 @@
             pt = mapGlyphPoint(layout.field, cell, stroke[k].x, stroke[k].y, layout.charCells);
             pts.push(pt);
           }
-          interp = interpolatePath(pts);
+          interp = preparePath(pts);
           if (interp.length > 0) {
             segments.push({
               points: interp,
@@ -1475,7 +1508,7 @@
     }
 
     for (i = 0; i < paths.length; i++) {
-      interp = interpolatePath(paths[i]);
+      interp = preparePath(paths[i]);
       if (interp.length > 0) {
         segments.push({
           points: interp,
