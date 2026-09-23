@@ -11,13 +11,13 @@
         <button id="drawing-mode-erase" class="drawing-mode-btn">Erase</button>
       </div>
       <label id="drawing-eraser-size-wrap" class="drawing-size-row" for="drawing-eraser-size">
-        <span class="drawing-toolbar-label">Eraser</span>
+        <span class="drawing-toolbar-label">Eraser size</span>
         <input id="drawing-eraser-size" type="number" value="8" min="2" max="80" step="1" disabled />
       </label>
       <button id="drawing-add-text" class="drawing-btn-secondary">Add text</button>
       <button id="drawing-remove-text" class="drawing-btn-secondary" disabled>Remove</button>
       <label id="drawing-size-wrap" class="drawing-size-row" for="drawing-char-size">
-        <span class="drawing-toolbar-label">Size</span>
+        <span class="drawing-toolbar-label">Font size</span>
         <input id="drawing-char-size" type="number" value="10" min="1" max="200" step="1" disabled />
       </label>
       <div class="drawing-res-row">
@@ -116,6 +116,28 @@
         <button id="drawing-stop" class="drawing-btn-secondary" disabled>Stop</button>
       </div>
       <div id="drawing-progress" class="drawing-progress"></div>
+    </div>
+
+    <div class="drawing-section drawing-charset-section">
+      <h3 class="drawing-section-title">Character sets</h3>
+      <p class="drawing-hint">Download extra letters and symbols for text drawing.</p>
+      <button id="drawing-download-sets" class="drawing-btn-secondary">Download sets</button>
+    </div>
+  </div>
+
+  <div id="drawing-charset-modal" class="drawing-modal" hidden>
+    <div class="drawing-modal-card drawing-charset-card">
+      <h3 class="drawing-modal-title">Character sets</h3>
+      <p class="drawing-modal-body">Choose a set to add more characters you can write with the arm.</p>
+      <div id="drawing-charset-meta" class="drawing-charset-meta"></div>
+      <h4 class="drawing-charset-heading">On this device</h4>
+      <div id="drawing-charset-local" class="drawing-charset-list"></div>
+      <h4 class="drawing-charset-heading">Available to download</h4>
+      <div id="drawing-charset-remote" class="drawing-charset-list"></div>
+      <div class="drawing-modal-actions">
+        <button id="drawing-charset-refresh" class="drawing-btn-secondary">Refresh</button>
+        <button id="drawing-charset-close" class="drawing-btn-primary">Close</button>
+      </div>
     </div>
   </div>
 

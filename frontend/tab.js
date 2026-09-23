@@ -28,6 +28,8 @@
   var modalEl    = document.getElementById('drawing-modal');
   var modalCancel = document.getElementById('drawing-modal-cancel');
   var modalConfirm = document.getElementById('drawing-modal-confirm');
+  var charsetModal = document.getElementById('drawing-charset-modal');
+  var downloadSetsBtn = document.getElementById('drawing-download-sets');
 
   // ---- State -------------------------------------------------------------
 
@@ -1313,6 +1315,7 @@
       moveCountEl.textContent = nMoves + (nMoves === 1 ? ' move' : ' moves');
     }
     addTextBtn.disabled = executing;
+    if (downloadSetsBtn) downloadSetsBtn.disabled = executing;
     removeTextBtn.disabled = executing || selectedTextId == null;
     undoBtn.disabled = executing || undoStack.length === 0;
     document.getElementById('drawing-mode-draw').disabled = executing;
@@ -1618,5 +1621,120 @@
     aborted = true;
     stopBtn.disabled = true;
     setProgress('Stopping\u2026');
+  });
+
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function charsetLabel(name) {
+    var map = {
+      Chinese: 'Chinese',
+      numbers: 'Numbers',
+      symbols: 'Symbols',
+      letters: 'Letters',
+      kanji_Chinese: 'Kanji'
+    };
+    if (map[name]) return map[name];
+    return String(name || '').replace(/[_-]+/g, ' ');
+  }
+
+  function renderCharsetModal(data) {
+    var meta = document.getElementById('drawing-charset-meta');
+    var localEl = document.getElementById('drawing-charset-local');
+    var remoteEl = document.getElementById('drawing-charset-remote');
+    meta.textContent = (data && data.error) ? 'Could not load available sets. Try again later.' : '';
+
+    function row(html) {
+      var div = document.createElement('div');
+      div.className = 'drawing-charset-row';
+      div.innerHTML = html;
+      return div;
+    }
+
+    localEl.innerHTML = '';
+    var local = (data && data.local) || [];
+    if (!local.length) {
+      localEl.innerHTML = '<div class="drawing-charset-empty">Nothing installed yet.</div>';
+    } else {
+      local.forEach(function (s) {
+        localEl.appendChild(row(
+          '<span title="' + charsetLabel(s.name) + '">' + charsetLabel(s.name) + '</span>' +
+          '<span class="drawing-charset-note">' + (s.count || 0) + ' characters</span>'
+        ));
+      });
+    }
+
+    remoteEl.innerHTML = '';
+    var remote = (data && data.remote) || [];
+    if (!remote.length) {
+      remoteEl.innerHTML = '<div class="drawing-charset-empty">No extra sets are available right now.</div>';
+    } else {
+      remote.forEach(function (s) {
+        var el = row(
+          '<span title="' + charsetLabel(s.name) + '">' + charsetLabel(s.name) + '</span>' +
+          '<span class="drawing-charset-note">' + (s.size ? fmtBytes(s.size) : '') + '</span>'
+        );
+        var btn = document.createElement('button');
+        btn.className = 'drawing-btn-secondary';
+        if (s.installed) {
+          btn.textContent = 'Installed';
+          btn.disabled = true;
+        } else {
+          btn.textContent = 'Download';
+          btn.addEventListener('click', function () { downloadCharset(s, btn); });
+        }
+        el.appendChild(btn);
+        remoteEl.appendChild(el);
+      });
+    }
+  }
+
+  function loadCharsets() {
+    var meta = document.getElementById('drawing-charset-meta');
+    meta.textContent = '';
+    ExtensionAPI.fetch('drawing', '/charsets')
+      .then(function (data) { renderCharsetModal(data || {}); })
+      .catch(function () {
+        renderCharsetModal({ local: [], remote: [], error: 'Cannot load character sets.' });
+      });
+  }
+
+  function downloadCharset(item, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Downloading…';
+    ExtensionAPI.fetch('drawing', '/charsets/download', {
+      method: 'POST',
+      body: JSON.stringify({ name: item.name, url: item.url })
+    }).then(function (data) {
+      if (!data || !data.success) {
+        btn.disabled = false;
+        btn.textContent = 'Download';
+        ExtensionAPI.showNotification((data && data.error) || 'Download failed', 'error');
+        return;
+      }
+      ExtensionAPI.showNotification('Installed ' + item.name + ' (' + (data.count || 0) + ' glyphs)', 'info');
+      scheduleGlyphFetch();
+      loadCharsets();
+    }).catch(function () {
+      btn.disabled = false;
+      btn.textContent = 'Download';
+      ExtensionAPI.showNotification('Download failed', 'error');
+    });
+  }
+
+  downloadSetsBtn.addEventListener('click', function () {
+    charsetModal.hidden = false;
+    loadCharsets();
+  });
+  document.getElementById('drawing-charset-close').addEventListener('click', function () {
+    charsetModal.hidden = true;
+  });
+  document.getElementById('drawing-charset-refresh').addEventListener('click', loadCharsets);
+  charsetModal.addEventListener('click', function (e) {
+    if (e.target === charsetModal) charsetModal.hidden = true;
   });
 })();

@@ -1,0 +1,11 @@
+{
+  "include": [
+    "numbers",
+    "symbols",
+    "letters"
+  ],
+  "github": {
+    "repo": "wlkata/WLKATA-StudioX-drawing",
+    "assetPattern": "^drawing-charset-(.+)\\.zip$"
+  }
+}

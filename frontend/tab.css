@@ -200,6 +200,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--text-primary, #333);
+  white-space: nowrap;
 }
 .drawing-res-row input {
   width: 60px;
@@ -477,6 +478,72 @@
 }
 .drawing-modal[hidden] {
   display: none;
+}
+.drawing-charset-section {
+  border-top: 1px solid var(--border-primary, #eee);
+  padding-top: 12px;
+}
+.drawing-charset-card {
+  width: min(400px, calc(100% - 24px));
+  max-height: min(80vh, 560px);
+  overflow: auto;
+  box-sizing: border-box;
+}
+.drawing-charset-meta {
+  font-size: 12px;
+  color: #c62828;
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.drawing-charset-meta:empty {
+  display: none;
+}
+.drawing-charset-heading {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary, #666);
+}
+.drawing-charset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 24px;
+}
+.drawing-charset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+.drawing-charset-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawing-charset-row .drawing-charset-note {
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-size: 11px;
+  color: var(--text-muted, #999);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawing-charset-row button {
+  flex-shrink: 0;
+}
+.drawing-charset-empty {
+  font-size: 12px;
+  color: var(--text-muted, #999);
+  padding: 4px 2px;
 }
 .drawing-modal-card {
   width: min(420px, 100%);

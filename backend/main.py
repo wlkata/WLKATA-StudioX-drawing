@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import zipfile
 from flask import Blueprint, jsonify, request
 
 blueprint = Blueprint("drawing", __name__)
@@ -20,26 +21,53 @@ _PATH_TOK_RE = re.compile(
 )
 _WS = set(" \t\r\n\u3000")
 
-_index = None  # cp -> (path, format)
+_index = None  # cp -> ("file", path) | ("zip", zip_path, member)
 _cache = {}
+_DEFAULT_GITHUB = {
+    "repo": "wlkata/StudioX",
+    "assetPattern": r"^drawing-charset-(.+)\.zip$",
+}
+
+
+def _load_config():
+    data = {"include": ["Chinese"], "github": dict(_DEFAULT_GITHUB)}
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            if loaded.get("include"):
+                data["include"] = loaded["include"]
+            gh = loaded.get("github") or {}
+            if isinstance(gh, dict):
+                data["github"].update(gh)
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return data
+
+
+def _save_config(data):
+    tmp = _CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, _CONFIG_PATH)
+
+
+def _reset_index():
+    global _index, _cache
+    _index = None
+    _cache.clear()
 
 
 def _load_include():
-    folders = ["Chinese"]
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        inc = data.get("include") or data.get("folders")
-        if isinstance(inc, list) and inc:
-            folders = []
-            for item in inc:
-                if isinstance(item, str) and item:
-                    folders.append(item)
-                elif isinstance(item, dict) and item.get("name"):
-                    folders.append(item["name"])
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-    return folders
+    folders = []
+    inc = _load_config().get("include") or []
+    for item in inc:
+        if isinstance(item, str) and item:
+            folders.append(item)
+        elif isinstance(item, dict) and item.get("name"):
+            folders.append(item["name"])
+    return folders or ["Chinese"]
 
 
 def _stem_to_cp(stem):
@@ -58,22 +86,58 @@ def _stem_to_cp(stem):
     return None
 
 
+def _iter_set_svgs(name):
+    zip_path = os.path.join(_CHAR_ROOT, name + ".zip")
+    dir_path = os.path.join(_CHAR_ROOT, name)
+    if os.path.isfile(zip_path):
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                base = os.path.basename(info.filename.replace("\\", "/"))
+                if not base.endswith(".svg") or base.startswith("."):
+                    continue
+                yield ("zip", zip_path, info.filename)
+        return
+    if os.path.isdir(dir_path):
+        for fn in os.listdir(dir_path):
+            if not fn.endswith(".svg"):
+                continue
+            yield ("file", os.path.join(dir_path, fn))
+
+
+def _set_source(name):
+    zip_path = os.path.join(_CHAR_ROOT, name + ".zip")
+    dir_path = os.path.join(_CHAR_ROOT, name)
+    if os.path.isfile(zip_path):
+        return "zip", zip_path
+    if os.path.isdir(dir_path):
+        return "folder", dir_path
+    return None, None
+
+
+def _count_svgs(name):
+    n = 0
+    for _ in _iter_set_svgs(name):
+        n += 1
+    return n
+
+
 def _index_glyphs():
     global _index
     if _index is not None:
         return _index
     found = {}
     for folder in _load_include():
-        d = os.path.join(_CHAR_ROOT, folder)
-        if not os.path.isdir(d):
-            continue
-        for name in os.listdir(d):
-            if not name.endswith(".svg"):
-                continue
-            cp = _stem_to_cp(name[:-4])
+        for spec in _iter_set_svgs(folder):
+            if spec[0] == "zip":
+                base = os.path.basename(spec[2].replace("\\", "/"))
+            else:
+                base = os.path.basename(spec[1])
+            cp = _stem_to_cp(base[:-4])
             if cp is None or cp in found:
                 continue
-            found[cp] = os.path.join(d, name)
+            found[cp] = spec
     _index = found
     return _index
 
@@ -363,18 +427,26 @@ def _parse_svg(text):
     return _parse_centerline(text)
 
 
+def _read_svg(spec):
+    if spec[0] == "file":
+        with open(spec[1], "r", encoding="utf-8") as f:
+            return f.read()
+    zip_path, member = spec[1], spec[2]
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        return zf.read(member).decode("utf-8")
+
+
 def _load_glyph(cp):
     if cp in _cache:
         return _cache[cp]
     index = _index_glyphs()
-    path = index.get(cp)
-    if not path:
+    spec = index.get(cp)
+    if not spec:
         _cache[cp] = None
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            strokes = _parse_svg(f.read())
-    except OSError:
+        strokes = _parse_svg(_read_svg(spec))
+    except (OSError, zipfile.BadZipFile, UnicodeDecodeError):
         _cache[cp] = None
         return None
     if not strokes:
@@ -413,3 +485,152 @@ def glyphs():
         "supported": supported,
         "folders": _load_include(),
     })
+
+
+def _github_cfg():
+    gh = _load_config().get("github") or {}
+    repo = (gh.get("repo") or _DEFAULT_GITHUB["repo"]).strip()
+    pattern = gh.get("assetPattern") or _DEFAULT_GITHUB["assetPattern"]
+    return repo, pattern
+
+
+def _fetch_github_assets():
+    import urllib.request
+    repo, pattern = _github_cfg()
+    cre = re.compile(pattern)
+    url = "https://api.github.com/repos/%s/releases?per_page=15" % repo
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "WLKATA-StudioX-drawing",
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        releases = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(releases, list):
+        releases = []
+    seen = set()
+    assets = []
+    for rel in releases:
+        if rel.get("draft"):
+            continue
+        for asset in rel.get("assets") or []:
+            fname = asset.get("name") or ""
+            m = cre.match(fname)
+            if not m:
+                continue
+            set_name = m.group(1) if m.lastindex else os.path.splitext(fname)[0]
+            if not set_name or set_name in seen:
+                continue
+            seen.add(set_name)
+            assets.append({
+                "name": set_name,
+                "file": fname,
+                "size": asset.get("size") or 0,
+                "url": asset.get("browser_download_url") or "",
+                "release": rel.get("tag_name") or "",
+            })
+    return repo, pattern, assets
+
+
+@blueprint.route("/charsets", methods=["GET"])
+def charsets():
+    local = []
+    for name in _load_include():
+        kind, path = _set_source(name)
+        if not kind:
+            continue
+        local.append({
+            "name": name,
+            "source": kind,
+            "count": _count_svgs(name),
+        })
+    remote = []
+    repo, pattern = _github_cfg()
+    err = ""
+    try:
+        repo, pattern, remote = _fetch_github_assets()
+    except Exception as e:
+        err = str(e)
+    installed = set(x["name"] for x in local)
+    for item in remote:
+        item["installed"] = item["name"] in installed
+    return jsonify({
+        "success": True,
+        "local": local,
+        "remote": remote,
+        "github": {"repo": repo, "assetPattern": pattern},
+        "error": err,
+    })
+
+
+def _safe_set_name(name):
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]+", name or ""))
+
+
+def _allowed_download_url(url):
+    if not url or not url.startswith("https://"):
+        return False
+    host = url.split("/")[2].lower()
+    return host in (
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    )
+
+
+@blueprint.route("/charsets/download", methods=["POST"])
+def charsets_download():
+    import urllib.request
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not _safe_set_name(name):
+        return jsonify({"success": False, "error": "Invalid set name."}), 400
+    if not _allowed_download_url(url):
+        return jsonify({"success": False, "error": "Download URL is not allowed."}), 400
+    os.makedirs(_CHAR_ROOT, exist_ok=True)
+    dest = os.path.join(_CHAR_ROOT, name + ".zip")
+    tmp = dest + ".part"
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "WLKATA-StudioX-drawing",
+            "Accept": "application/octet-stream",
+        })
+        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
+            while True:
+                chunk = resp.read(1024 * 256)
+                if not chunk:
+                    break
+                out.write(chunk)
+        with zipfile.ZipFile(tmp, "r") as zf:
+            if zf.testzip() is not None:
+                raise zipfile.BadZipFile("corrupt zip")
+            has_svg = any(
+                os.path.basename(i.filename.replace("\\", "/")).endswith(".svg")
+                and not i.is_dir()
+                for i in zf.infolist()
+            )
+            if not has_svg:
+                raise zipfile.BadZipFile("zip has no SVG files")
+        os.replace(tmp, dest)
+    except Exception as e:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    cfg = _load_config()
+    inc = list(cfg.get("include") or [])
+    if name not in inc:
+        inc.append(name)
+        cfg["include"] = inc
+        _save_config(cfg)
+    _reset_index()
+    return jsonify({
+        "success": True,
+        "name": name,
+        "count": _count_svgs(name),
+        "include": _load_include(),
+    })
+
