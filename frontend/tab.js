@@ -20,6 +20,7 @@
   var calibBREl  = document.getElementById('drawing-calib-br');
   var calibStatusEl = document.getElementById('drawing-calib-status');
   var startBtn   = document.getElementById('drawing-start');
+  var moveCountEl = document.getElementById('drawing-move-count');
   var stopBtn    = document.getElementById('drawing-stop');
   var progressEl = document.getElementById('drawing-progress');
   var deviceSelect  = document.getElementById('drawing-device-select');
@@ -49,6 +50,7 @@
   var selectedTextId = null;
   var nextTextId = 1;
   var textDrag = null;
+  var textResize = null;
   var textSelDrag = null;
   var caretTimer = null;
   var lastGrid = null;
@@ -208,9 +210,18 @@
 
   // ---- Text layout -------------------------------------------------------
 
+  function fieldWrapCols(field, gi) {
+    var charCells = clampSize(field.size, gi);
+    var maxCols = Math.max(1, Math.floor((gi.maxGx - field.gx) / charCells));
+    var cols = parseInt(field.cols, 10);
+    if (!isFinite(cols) || cols < 1) cols = Math.min(4, maxCols);
+    if (cols > maxCols) cols = maxCols;
+    return cols;
+  }
+
   function layoutField(field, gi) {
     var charCells = clampSize(field.size, gi);
-    var cols = Math.floor((gi.maxGx - field.gx) / charCells);
+    var cols = fieldWrapCols(field, gi);
     var rows = Math.floor((gi.maxGy - field.gy) / charCells);
     if (cols < 0) cols = 0;
     if (rows < 0) rows = 0;
@@ -286,7 +297,7 @@
 
   function walkLayout(field, gi) {
     var charCells = clampSize(field.size, gi);
-    var cols = Math.floor((gi.maxGx - field.gx) / charCells);
+    var cols = fieldWrapCols(field, gi);
     var rows = Math.floor((gi.maxGy - field.gy) / charCells);
     if (cols < 0) cols = 0;
     if (rows < 0) rows = 0;
@@ -514,7 +525,15 @@
     if (gy > gi.maxGy - size) gy = 3;
     if (gx < 0) gx = 0;
     if (gy < 0) gy = 0;
-    var field = { id: nextTextId++, gx: gx, gy: gy, size: size, text: '' };
+    var maxCols = Math.max(1, Math.floor((gi.maxGx - gx) / size));
+    var field = {
+      id: nextTextId++,
+      gx: gx,
+      gy: gy,
+      size: size,
+      cols: Math.min(4, maxCols),
+      text: ''
+    };
     textFields.push(field);
     selectTextField(field.id);
     renderCanvas();
@@ -547,8 +566,12 @@
     ta.placeholder = '汉字';
     ta.spellcheck = false;
     ta.value = field.text || '';
+    var resize = document.createElement('div');
+    resize.className = 'drawing-text-item-resize';
+    resize.title = 'Drag to set width';
     el.appendChild(bar);
     el.appendChild(ta);
+    el.appendChild(resize);
     textLayer.appendChild(el);
 
     el.addEventListener('mousedown', function (e) {
@@ -557,6 +580,9 @@
       if (e.target === bar) {
         e.preventDefault();
         startTextDrag(field, e);
+      } else if (e.target === resize) {
+        e.preventDefault();
+        startTextResize(field, e);
       } else if (e.target === ta && !e.isComposing) {
         e.preventDefault();
         ta.focus();
@@ -609,7 +635,8 @@
     var charCells = clampSize(field.size, gi);
     var gx = Math.round(textDrag.origGx + (e.clientX - textDrag.x) / gi.cell);
     var gy = Math.round(textDrag.origGy + (e.clientY - textDrag.y) / gi.cell);
-    var maxGx = Math.max(0, gi.maxGx - charCells);
+    var wrapW = fieldWrapCols(field, gi) * charCells;
+    var maxGx = Math.max(0, gi.maxGx - wrapW);
     var maxGy = Math.max(0, gi.maxGy - charCells);
     if (gx < 0) gx = 0;
     if (gy < 0) gy = 0;
@@ -624,6 +651,39 @@
     textDrag = null;
     document.removeEventListener('mousemove', onTextDragMove);
     document.removeEventListener('mouseup', onTextDragEnd);
+    updateUI();
+  }
+
+  function startTextResize(field, e) {
+    var gi = gridInfo();
+    textResize = {
+      field: field,
+      origCols: fieldWrapCols(field, gi),
+      x: e.clientX
+    };
+    document.addEventListener('mousemove', onTextResizeMove);
+    document.addEventListener('mouseup', onTextResizeEnd);
+  }
+
+  function onTextResizeMove(e) {
+    if (!textResize) return;
+    var gi = gridInfo();
+    var field = textResize.field;
+    var charCells = clampSize(field.size, gi);
+    var side = charCells * gi.cell;
+    if (side <= 0) return;
+    var maxCols = Math.max(1, Math.floor((gi.maxGx - field.gx) / charCells));
+    var cols = Math.round(textResize.origCols + (e.clientX - textResize.x) / side);
+    if (cols < 1) cols = 1;
+    if (cols > maxCols) cols = maxCols;
+    field.cols = cols;
+    renderCanvas();
+  }
+
+  function onTextResizeEnd() {
+    textResize = null;
+    document.removeEventListener('mousemove', onTextResizeMove);
+    document.removeEventListener('mouseup', onTextResizeEnd);
     updateUI();
   }
 
@@ -674,7 +734,7 @@
       if (!el) el = createTextItem(field);
       layout = layoutField(field, gi);
       side = layout.charCells * gi.cell;
-      cols = Math.max(1, layout.usedCols);
+      cols = Math.max(1, layout.cols);
       rows = Math.max(1, layout.usedRows);
       el.style.left = (gi.oX + field.gx * gi.cell) + 'px';
       el.style.top = (gi.oY + field.gy * gi.cell) + 'px';
@@ -1248,6 +1308,10 @@
     var hasDraw = paths.length > 0;
     var textErr = textHasTypedChars() && textHasErrors(layouts);
     startBtn.disabled = !selectedPort || !isCalibrated || executing || (!hasDraw && !hasText) || textErr;
+    if (moveCountEl && !executing) {
+      var nMoves = countMoves();
+      moveCountEl.textContent = nMoves + (nMoves === 1 ? ' move' : ' moves');
+    }
     addTextBtn.disabled = executing;
     removeTextBtn.disabled = executing || selectedTextId == null;
     undoBtn.disabled = executing || undoStack.length === 0;
@@ -1420,6 +1484,20 @@
       }
     }
     return segments;
+  }
+
+  function countMoves() {
+    var segs = buildSegments();
+    var n = 0;
+    var i, len;
+    for (i = 0; i < segs.length; i++) {
+      len = segs[i].points.length;
+      if (!len) continue;
+      n += 2;
+      if (len > 1) n += len - 1;
+      n += 1;
+    }
+    return n;
   }
 
   async function runDrawing() {
