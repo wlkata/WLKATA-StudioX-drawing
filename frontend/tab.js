@@ -12,12 +12,19 @@
   var removeTextBtn = document.getElementById('drawing-remove-text');
   var sizeInput  = document.getElementById('drawing-char-size');
   var sizeWrap   = document.getElementById('drawing-size-wrap');
+  var spacingHInput = document.getElementById('drawing-char-spacing-h');
+  var spacingHWrap  = document.getElementById('drawing-spacing-h-wrap');
+  var spacingVInput = document.getElementById('drawing-char-spacing-v');
+  var spacingVWrap  = document.getElementById('drawing-spacing-v-wrap');
   var eraserSizeInput = document.getElementById('drawing-eraser-size');
   var eraserSizeWrap = document.getElementById('drawing-eraser-size-wrap');
   var textErrorEl = document.getElementById('drawing-text-error');
   var calibTLEl  = document.getElementById('drawing-calib-tl');
   var calibTREl  = document.getElementById('drawing-calib-tr');
   var calibBREl  = document.getElementById('drawing-calib-br');
+  var calibGotoTL = document.getElementById('drawing-goto-tl');
+  var calibGotoTR = document.getElementById('drawing-goto-tr');
+  var calibGotoBR = document.getElementById('drawing-goto-br');
   var calibStatusEl = document.getElementById('drawing-calib-status');
   var startBtn   = document.getElementById('drawing-start');
   var moveCountEl = document.getElementById('drawing-move-count');
@@ -30,6 +37,7 @@
   var modalConfirm = document.getElementById('drawing-modal-confirm');
   var charsetModal = document.getElementById('drawing-charset-modal');
   var downloadSetsBtn = document.getElementById('drawing-download-sets');
+  var slopeAllowanceInput = document.getElementById('drawing-slope-allowance');
 
   // ---- State -------------------------------------------------------------
 
@@ -58,10 +66,12 @@
   var lastGrid = null;
 
   var glyphMap = {};
+  var inkBoundsCache = {};
   var glyphMissing = [];
   var glyphFetchError = '';
   var glyphTimer = null;
   var glyphReq = 0;
+  var slopeAllowance = 5;
 
   var _serverUrl = ExtensionAPI.getServerUrl();
   var WS = /[ \t\u3000]/;
@@ -200,6 +210,67 @@
     var cap = Math.max(1, Math.min(gi.maxGx, gi.maxGy));
     if (n > cap) n = cap;
     return n;
+  }
+
+  var DEFAULT_SPACING = 10;
+  var MAX_SPACING = 40;
+
+  function clampSpacing(n) {
+    n = parseFloat(n);
+    if (!isFinite(n)) return DEFAULT_SPACING;
+    if (n < 0) return 0;
+    if (n > MAX_SPACING) return MAX_SPACING;
+    return Math.round(n);
+  }
+
+  function fieldSpacingX(field) {
+    if (!field) return DEFAULT_SPACING;
+    if (field.spacingX != null) return clampSpacing(field.spacingX);
+    if (field.spacing != null) return clampSpacing(field.spacing);
+    return DEFAULT_SPACING;
+  }
+
+  function fieldSpacingY(field) {
+    if (!field) return DEFAULT_SPACING;
+    if (field.spacingY != null) return clampSpacing(field.spacingY);
+    if (field.spacing != null) return clampSpacing(field.spacing);
+    return DEFAULT_SPACING;
+  }
+
+  function glyphInkBounds(strokes) {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    var s, p, pt;
+    if (!strokes) return null;
+    for (s = 0; s < strokes.length; s++) {
+      for (p = 0; p < strokes[s].length; p++) {
+        pt = strokes[s][p];
+        if (pt.x < minX) minX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y > maxY) maxY = pt.y;
+      }
+    }
+    if (!isFinite(minX)) return null;
+    if (maxX - minX < 1e-6) {
+      minX -= 0.05;
+      maxX += 0.05;
+    }
+    if (maxY - minY < 1e-6) {
+      minY -= 0.05;
+      maxY += 0.05;
+    }
+    return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+  }
+
+  function inkBoundsForCell(cell) {
+    if (!cell || !cell.strokes) return null;
+    var key = cell.ch;
+    if (Object.prototype.hasOwnProperty.call(inkBoundsCache, key)) {
+      return inkBoundsCache[key];
+    }
+    var bounds = glyphInkBounds(cell.strokes);
+    inkBoundsCache[key] = bounds;
+    return bounds;
   }
 
   function selectedField() {
@@ -390,12 +461,31 @@
   }
 
   function mapGlyphPoint(field, cell, nx, ny, charCells) {
-    var inset = charCells * 0.1;
-    var inner = charCells - 2 * inset;
-    if (inner < 0.01) inner = charCells;
+    var padX = charCells * (fieldSpacingX(field) / 100);
+    var padY = charCells * (fieldSpacingY(field) / 100);
+    var innerX = charCells - 2 * padX;
+    var innerY = charCells - 2 * padY;
+    if (innerX < 0.01) innerX = charCells;
+    if (innerY < 0.01) innerY = charCells;
+    var ox = field.gx + cell.col * charCells;
+    var oy = field.gy + cell.row * charCells;
+    var srcX0 = 0;
+    var srcY0 = 0;
+    var srcW = 1;
+    var srcH = 1;
+    var b = inkBoundsForCell(cell);
+    if (b) {
+      srcX0 = b.minX;
+      srcY0 = b.minY;
+      srcW = Math.max(1e-6, b.maxX - b.minX);
+      srcH = Math.max(1e-6, b.maxY - b.minY);
+    }
+    var scale = Math.min(innerX / srcW, innerY / srcH);
+    var x0 = ox + padX + (innerX - srcW * scale) / 2;
+    var y0 = oy + padY + (innerY - srcH * scale) / 2;
     return {
-      gx: field.gx + cell.col * charCells + inset + nx * inner,
-      gy: field.gy + cell.row * charCells + inset + ny * inner
+      gx: x0 + (nx - srcX0) * scale,
+      gy: y0 + (ny - srcY0) * scale
     };
   }
 
@@ -470,6 +560,7 @@
     if (!need.length) {
       glyphReq += 1;
       glyphMap = {};
+      inkBoundsCache = {};
       glyphMissing = [];
       glyphFetchError = '';
       renderCanvas();
@@ -483,10 +574,12 @@
         if (!data || !data.success) {
           glyphFetchError = (data && data.error) || 'Cannot load character data.';
           glyphMap = {};
+          inkBoundsCache = {};
           glyphMissing = need.slice();
         } else {
           glyphFetchError = '';
           glyphMap = data.glyphs || {};
+          inkBoundsCache = {};
           glyphMissing = data.missing || [];
         }
         renderCanvas();
@@ -496,6 +589,7 @@
         if (req !== glyphReq) return;
         glyphFetchError = 'Cannot load character data.';
         glyphMap = {};
+        inkBoundsCache = {};
         glyphMissing = need.slice();
         renderCanvas();
         updateUI();
@@ -506,13 +600,27 @@
     selectedTextId = id;
     var field = selectedField();
     if (field) {
-      sizeInput.disabled = false;
+      sizeInput.disabled = executing;
       sizeInput.value = String(clampSize(field.size, gridInfo()));
       sizeWrap.classList.add('active');
+      if (spacingHInput) {
+        spacingHInput.disabled = executing;
+        spacingHInput.value = String(fieldSpacingX(field));
+      }
+      if (spacingVInput) {
+        spacingVInput.disabled = executing;
+        spacingVInput.value = String(fieldSpacingY(field));
+      }
+      if (spacingHWrap) spacingHWrap.classList.add('active');
+      if (spacingVWrap) spacingVWrap.classList.add('active');
       removeTextBtn.disabled = executing;
     } else {
       sizeInput.disabled = true;
       sizeWrap.classList.remove('active');
+      if (spacingHInput) spacingHInput.disabled = true;
+      if (spacingVInput) spacingVInput.disabled = true;
+      if (spacingHWrap) spacingHWrap.classList.remove('active');
+      if (spacingVWrap) spacingVWrap.classList.remove('active');
       removeTextBtn.disabled = true;
     }
     syncTextOverlays();
@@ -520,8 +628,11 @@
 
   function addTextField() {
     var gi = gridInfo();
-    var size = selectedField() ? clampSize(selectedField().size, gi) : 10;
+    var prev = selectedField();
+    var size = prev ? clampSize(prev.size, gi) : 10;
     size = clampSize(size, gi);
+    var spacingX = prev ? fieldSpacingX(prev) : DEFAULT_SPACING;
+    var spacingY = prev ? fieldSpacingY(prev) : DEFAULT_SPACING;
     var gx = 2 + ((textFields.length * 3) % Math.max(1, gi.maxGx - size - 2));
     var gy = 3 + Math.floor(textFields.length / 6) * (size + 1);
     if (gy > gi.maxGy - size) gy = 3;
@@ -533,6 +644,8 @@
       gx: gx,
       gy: gy,
       size: size,
+      spacingX: spacingX,
+      spacingY: spacingY,
       cols: Math.min(4, maxCols),
       text: ''
     };
@@ -783,6 +896,35 @@
   sizeInput.addEventListener('focus', function () {
     if (selectedField()) sizeWrap.classList.add('active');
   });
+
+  function bindSpacingInput(input, wrap, axis) {
+    if (!input) return;
+    function apply() {
+      var field = selectedField();
+      if (!field) return;
+      var value = clampSpacing(input.value);
+      if (axis === 'x') field.spacingX = value;
+      else field.spacingY = value;
+      input.value = String(value);
+      renderCanvas();
+      updateUI();
+    }
+    input.addEventListener('change', apply);
+    input.addEventListener('input', function () {
+      var field = selectedField();
+      if (!field) return;
+      var value = clampSpacing(input.value);
+      if (axis === 'x') field.spacingX = value;
+      else field.spacingY = value;
+      renderCanvas();
+      updateUI();
+    });
+    input.addEventListener('focus', function () {
+      if (selectedField() && wrap) wrap.classList.add('active');
+    });
+  }
+  bindSpacingInput(spacingHInput, spacingHWrap, 'x');
+  bindSpacingInput(spacingVInput, spacingVWrap, 'y');
 
   // ---- Canvas rendering --------------------------------------------------
 
@@ -1261,13 +1403,59 @@
 
   var jogStep = 5;
   var jogBusy = false;
+  var STEP_MIN = 1;
+  var STEP_MAX = 50;
 
   var stepBtns = document.querySelectorAll('.drawing-jog-step');
+  var stepInput = document.getElementById('drawing-jog-step-custom');
+
+  function clampJogStep(step) {
+    if (!isFinite(step)) return null;
+    if (step < STEP_MIN) return STEP_MIN;
+    if (step > STEP_MAX) return STEP_MAX;
+    return step;
+  }
+
+  function applyJogStep(step, fromPreset) {
+    var clamped = clampJogStep(step);
+    if (clamped == null) return false;
+    jogStep = clamped;
+    var matched = false;
+    var k, btnStep, on;
+    for (k = 0; k < stepBtns.length; k++) {
+      btnStep = parseFloat(stepBtns[k].getAttribute('data-step'));
+      on = btnStep === clamped;
+      stepBtns[k].classList.toggle('active', on);
+      if (on) matched = true;
+    }
+    if (stepInput) {
+      if (fromPreset) stepInput.value = String(clamped);
+      stepInput.classList.toggle('custom-active', !matched);
+    }
+    return true;
+  }
+
   for (var si = 0; si < stepBtns.length; si++) {
     stepBtns[si].addEventListener('click', function () {
-      for (var k = 0; k < stepBtns.length; k++) stepBtns[k].classList.remove('active');
-      this.classList.add('active');
-      jogStep = parseInt(this.getAttribute('data-step'), 10);
+      applyJogStep(parseFloat(this.getAttribute('data-step')), true);
+    });
+  }
+  if (stepInput) {
+    stepInput.addEventListener('input', function () {
+      var raw = parseFloat(this.value);
+      if (!isFinite(raw)) return;
+      if (raw > STEP_MAX) {
+        this.value = String(STEP_MAX);
+        applyJogStep(STEP_MAX, false);
+      } else if (raw >= STEP_MIN) {
+        applyJogStep(raw, false);
+      }
+    });
+    stepInput.addEventListener('change', function () {
+      var clamped = clampJogStep(parseFloat(this.value));
+      if (clamped == null) clamped = jogStep;
+      this.value = String(clamped);
+      applyJogStep(clamped, false);
     });
   }
 
@@ -1304,6 +1492,15 @@
     calibStatusEl.textContent = isCalibrated ? 'Calibrated' : 'Not calibrated';
     calibStatusEl.classList.toggle('calibrated', isCalibrated);
 
+    function setGoto(btn, pos) {
+      if (!btn) return;
+      btn.hidden = !pos;
+      btn.disabled = !pos || !selectedPort || executing;
+    }
+    setGoto(calibGotoTL, calib.tl);
+    setGoto(calibGotoTR, calib.tr);
+    setGoto(calibGotoBR, calib.br);
+
     var gi = gridInfo();
     var layouts = layoutAll(gi);
     var hasText = textHasContent(layouts);
@@ -1314,6 +1511,7 @@
       var nMoves = countMoves();
       moveCountEl.textContent = nMoves + (nMoves === 1 ? ' move' : ' moves');
     }
+    updateSimplifyStats();
     addTextBtn.disabled = executing;
     if (downloadSetsBtn) downloadSetsBtn.disabled = executing;
     removeTextBtn.disabled = executing || selectedTextId == null;
@@ -1321,11 +1519,20 @@
     document.getElementById('drawing-mode-draw').disabled = executing;
     document.getElementById('drawing-mode-erase').disabled = executing;
     eraserSizeInput.disabled = executing || toolMode !== 'erase';
+    if (slopeAllowanceInput) slopeAllowanceInput.disabled = executing;
+    var textSelected = !!selectedField();
+    sizeInput.disabled = executing || !textSelected;
+    if (spacingHInput) spacingHInput.disabled = executing || !textSelected;
+    if (spacingVInput) spacingVInput.disabled = executing || !textSelected;
     eraserSizeWrap.classList.toggle('active', toolMode === 'erase');
     var jogOn = !!selectedPort && !executing;
     var jogBtnsUI = document.querySelectorAll('.drawing-jog-btn');
     var jb;
     for (jb = 0; jb < jogBtnsUI.length; jb++) jogBtnsUI[jb].disabled = !jogOn;
+    var stepBtnsUI = document.querySelectorAll('.drawing-jog-step');
+    for (jb = 0; jb < stepBtnsUI.length; jb++) stepBtnsUI[jb].disabled = !jogOn;
+    var stepCustom = document.getElementById('drawing-jog-step-custom');
+    if (stepCustom) stepCustom.disabled = !jogOn;
   }
 
   function recordCalibPoint(key) {
@@ -1346,9 +1553,21 @@
     });
   }
 
+  function gotoCalibPose(pos) {
+    if (!pos || executing) return;
+    if (!selectedPort) {
+      ExtensionAPI.showNotification('Select a robot first', 'error');
+      return;
+    }
+    cmdMove(pos.x, pos.y, pos.z);
+  }
+
   document.getElementById('drawing-record-tl').addEventListener('click', function () { recordCalibPoint('tl'); });
   document.getElementById('drawing-record-tr').addEventListener('click', function () { recordCalibPoint('tr'); });
   document.getElementById('drawing-record-br').addEventListener('click', function () { recordCalibPoint('br'); });
+  if (calibGotoTL) calibGotoTL.addEventListener('click', function () { gotoCalibPose(calib.tl); });
+  if (calibGotoTR) calibGotoTR.addEventListener('click', function () { gotoCalibPose(calib.tr); });
+  if (calibGotoBR) calibGotoBR.addEventListener('click', function () { gotoCalibPose(calib.br); });
 
   document.getElementById('drawing-clear-calib').addEventListener('click', function () {
     calib = { tl: null, tr: null, br: null };
@@ -1360,6 +1579,24 @@
 
   var saved = ExtensionAPI.getData('drawing', 'calibration');
   if (saved) { calib = saved; }
+  var savedAllowance = ExtensionAPI.getData('drawing', 'slopeAllowance');
+  if (typeof savedAllowance === 'number' && isFinite(savedAllowance)) {
+    slopeAllowance = clampSlopeAllowance(savedAllowance);
+  }
+  if (slopeAllowanceInput) {
+    slopeAllowanceInput.value = String(slopeAllowance);
+    slopeAllowanceInput.addEventListener('input', function () {
+      slopeAllowance = clampSlopeAllowance(slopeAllowanceInput.value);
+      ExtensionAPI.setData('drawing', 'slopeAllowance', slopeAllowance);
+      updateUI();
+    });
+    slopeAllowanceInput.addEventListener('change', function () {
+      slopeAllowance = clampSlopeAllowance(slopeAllowanceInput.value);
+      slopeAllowanceInput.value = String(slopeAllowance);
+      ExtensionAPI.setData('drawing', 'slopeAllowance', slopeAllowance);
+      updateUI();
+    });
+  }
   updateUI();
 
   // ---- Coordinate transform ----------------------------------------------
@@ -1379,33 +1616,46 @@
     };
   }
 
-  function interpolatePath(path) {
-    if (path.length <= 1) return path.slice();
-    var gi = gridInfo();
-    var result = [path[0]];
-    for (var i = 1; i < path.length; i++) {
-      var prev = path[i - 1], curr = path[i];
-      var dgx  = curr.gx - prev.gx;
-      var dgy  = curr.gy - prev.gy;
-      var dist = Math.sqrt(dgx * dgx + dgy * dgy);
-      var steps = Math.max(1, Math.ceil(dist));
-      for (var s = 1; s <= steps; s++) {
-        var t  = s / steps;
-        var sx = Math.min(gi.maxGx, Math.max(0, prev.gx + dgx * t));
-        var sy = Math.min(gi.maxGy, Math.max(0, prev.gy + dgy * t));
-        var last = result[result.length - 1];
-        if (Math.abs(sx - last.gx) > 0.01 || Math.abs(sy - last.gy) > 0.01) {
-          result.push({ gx: sx, gy: sy });
-        }
-      }
-    }
-    return result;
+  function clampSlopeAllowance(v) {
+    v = parseFloat(v);
+    if (!isFinite(v)) return 5;
+    if (v < 0) return 0;
+    if (v > 100) return 100;
+    return v;
   }
 
-  function simplifyCollinear(points) {
+  function slopeAllowancePct() {
+    return slopeAllowance;
+  }
+
+  function slopesMatch(dx1, dy1, dx2, dy2, pct) {
+    var len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+    var len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+    if (len1 < 1e-9 || len2 < 1e-9) return true;
+    var dot = dx1 * dx2 + dy1 * dy2;
+    if (dot <= 0) return false;
+    var allow = Math.max(0, Number(pct) || 0) / 100;
+    var vert1 = Math.abs(dx1) <= 1e-9 * len1;
+    var vert2 = Math.abs(dx2) <= 1e-9 * len2;
+    if (vert1 && vert2) return true;
+    if (allow <= 0) {
+      var cross = dx1 * dy2 - dy1 * dx2;
+      return Math.abs(cross) <= 1e-6 * len1 * len2;
+    }
+    if (vert1 || vert2) {
+      return Math.abs(dx1 * dy2 - dy1 * dx2) / (len1 * len2) <= allow;
+    }
+    var s1 = dy1 / dx1;
+    var s2 = dy2 / dx2;
+    var mag = Math.max(Math.abs(s1), Math.abs(s2), 1e-9);
+    return Math.abs(s1 - s2) / mag <= allow;
+  }
+
+  function simplifyCollinear(points, pct) {
     if (!points || points.length <= 2) return points ? points.slice() : [];
+    if (pct == null) pct = slopeAllowancePct();
     var out = [points[0]];
-    var i, a, b, c, dx1, dy1, dx2, dy2, len1, len2, cross, dot;
+    var i, a, b, c, dx1, dy1, dx2, dy2, len1, len2;
     for (i = 1; i < points.length - 1; i++) {
       a = out[out.length - 1];
       b = points[i];
@@ -1418,9 +1668,7 @@
       dy2 = c.gy - b.gy;
       len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
       if (len2 < 1e-9) continue;
-      cross = dx1 * dy2 - dy1 * dx2;
-      dot = dx1 * dx2 + dy1 * dy2;
-      if (Math.abs(cross) <= 1e-6 * len1 * len2 && dot > 0) continue;
+      if (slopesMatch(dx1, dy1, dx2, dy2, pct)) continue;
       out.push(b);
     }
     var last = points[points.length - 1];
@@ -1429,10 +1677,6 @@
       out.push(last);
     }
     return out;
-  }
-
-  function preparePath(path) {
-    return simplifyCollinear(interpolatePath(path));
   }
 
   function sleep(ms) {
@@ -1472,11 +1716,11 @@
     progressEl.classList.toggle('running', !!msg);
   }
 
-  function buildSegments() {
+  function collectSourceSegments() {
     var gi = gridInfo();
     var layouts = layoutAll(gi);
     var segments = [];
-    var i, j, k, s, layout, cell, stroke, pts, interp, pt, totalChars, charIndex;
+    var i, j, k, s, layout, cell, stroke, pts, pt, totalChars, charIndex;
 
     totalChars = 0;
     for (i = 0; i < layouts.length; i++) {
@@ -1498,10 +1742,9 @@
             pt = mapGlyphPoint(layout.field, cell, stroke[k].x, stroke[k].y, layout.charCells);
             pts.push(pt);
           }
-          interp = preparePath(pts);
-          if (interp.length > 0) {
+          if (pts.length > 0) {
             segments.push({
-              points: interp,
+              points: pts,
               label: 'Character ' + charIndex + '/' + totalChars + ' ' + cell.ch
                       + ' — stroke ' + (s + 1) + '/' + cell.strokes.length
             });
@@ -1511,10 +1754,9 @@
     }
 
     for (i = 0; i < paths.length; i++) {
-      interp = preparePath(paths[i]);
-      if (interp.length > 0) {
+      if (paths[i].length > 0) {
         segments.push({
-          points: interp,
+          points: paths[i].slice(),
           label: 'Freehand ' + (i + 1) + '/' + paths.length
         });
       }
@@ -1522,8 +1764,27 @@
     return segments;
   }
 
-  function countMoves() {
-    var segs = buildSegments();
+  function buildSegments(pct) {
+    if (pct == null) pct = slopeAllowancePct();
+    var src = collectSourceSegments();
+    var segments = [];
+    var i, pts;
+    for (i = 0; i < src.length; i++) {
+      pts = simplifyCollinear(src[i].points, pct);
+      if (pts.length > 0) {
+        segments.push({ points: pts, label: src[i].label });
+      }
+    }
+    return segments;
+  }
+
+  function countPoints(segs) {
+    var n = 0, i;
+    for (i = 0; i < segs.length; i++) n += segs[i].points.length;
+    return n;
+  }
+
+  function countMovesForSegments(segs) {
     var n = 0;
     var i, len;
     for (i = 0; i < segs.length; i++) {
@@ -1534,6 +1795,31 @@
       n += 1;
     }
     return n;
+  }
+
+  function countMoves() {
+    return countMovesForSegments(buildSegments());
+  }
+
+  function formatAllowance(pct) {
+    if (Math.abs(pct - Math.round(pct)) < 1e-9) return String(Math.round(pct));
+    return String(Math.round(pct * 10) / 10);
+  }
+
+  function updateSimplifyStats() {
+    var el = document.getElementById('drawing-simplify-stats');
+    if (!el) return;
+    var pct = slopeAllowancePct();
+    var raw = collectSourceSegments();
+    var simp = buildSegments(pct);
+    var rawStrokes = raw.length;
+    var simpStrokes = simp.length;
+    el.innerHTML =
+      '<div>Without combining: ' + rawStrokes + ' stroke' + (rawStrokes === 1 ? '' : 's') +
+      ', ' + countPoints(raw) + ' points, ' + countMovesForSegments(raw) + ' moves</div>' +
+      '<div>With ' + formatAllowance(pct) + '% allowance: ' + simpStrokes + ' stroke' +
+      (simpStrokes === 1 ? '' : 's') + ', ' + countPoints(simp) + ' points, ' +
+      countMovesForSegments(simp) + ' moves</div>';
   }
 
   async function runDrawing() {

@@ -20,6 +20,16 @@
         <span class="drawing-toolbar-label">Font size</span>
         <input id="drawing-char-size" type="number" value="10" min="1" max="200" step="1" disabled />
       </label>
+      <label id="drawing-spacing-h-wrap" class="drawing-size-row" for="drawing-char-spacing-h">
+        <span class="drawing-toolbar-label">H pad</span>
+        <input id="drawing-char-spacing-h" type="number" value="10" min="0" max="40" step="1" disabled />
+        <span class="drawing-jog-unit">%</span>
+      </label>
+      <label id="drawing-spacing-v-wrap" class="drawing-size-row" for="drawing-char-spacing-v">
+        <span class="drawing-toolbar-label">V pad</span>
+        <input id="drawing-char-spacing-v" type="number" value="10" min="0" max="40" step="1" disabled />
+        <span class="drawing-jog-unit">%</span>
+      </label>
       <div class="drawing-res-row">
         <span class="drawing-toolbar-label">Resolution</span>
         <input id="drawing-resolution" type="number" value="50" min="10" max="80" step="5" />
@@ -70,7 +80,7 @@
           <button class="drawing-jog-step active" data-step="5">5</button>
           <button class="drawing-jog-step" data-step="10">10</button>
         </div>
-        <span class="drawing-jog-unit">mm</span>
+        <input id="drawing-jog-step-custom" class="drawing-jog-step-input" type="number" min="1" max="50" step="1" value="5" title="Custom step size (1–50)" />
       </div>
     </div>
 
@@ -82,21 +92,30 @@
         <div class="drawing-calib-point">
           <div class="drawing-calib-point-header">
             <span class="drawing-calib-label">Top Left</span>
-            <span id="drawing-calib-tl" class="drawing-calib-value">&mdash;</span>
+            <div class="drawing-calib-pose">
+              <span id="drawing-calib-tl" class="drawing-calib-value">&mdash;</span>
+              <button id="drawing-goto-tl" class="drawing-btn-secondary drawing-record-btn" hidden disabled>Move to</button>
+            </div>
           </div>
           <button id="drawing-record-tl" class="drawing-btn-secondary drawing-record-btn">Record TL</button>
         </div>
         <div class="drawing-calib-point">
           <div class="drawing-calib-point-header">
             <span class="drawing-calib-label">Top Right</span>
-            <span id="drawing-calib-tr" class="drawing-calib-value">&mdash;</span>
+            <div class="drawing-calib-pose">
+              <span id="drawing-calib-tr" class="drawing-calib-value">&mdash;</span>
+              <button id="drawing-goto-tr" class="drawing-btn-secondary drawing-record-btn" hidden disabled>Move to</button>
+            </div>
           </div>
           <button id="drawing-record-tr" class="drawing-btn-secondary drawing-record-btn">Record TR</button>
         </div>
         <div class="drawing-calib-point">
           <div class="drawing-calib-point-header">
             <span class="drawing-calib-label">Bottom Right</span>
-            <span id="drawing-calib-br" class="drawing-calib-value">&mdash;</span>
+            <div class="drawing-calib-pose">
+              <span id="drawing-calib-br" class="drawing-calib-value">&mdash;</span>
+              <button id="drawing-goto-br" class="drawing-btn-secondary drawing-record-btn" hidden disabled>Move to</button>
+            </div>
           </div>
           <button id="drawing-record-br" class="drawing-btn-secondary drawing-record-btn">Record BR</button>
         </div>
@@ -122,6 +141,20 @@
       <h3 class="drawing-section-title">Character sets</h3>
       <p class="drawing-hint">Download extra letters and symbols for text drawing.</p>
       <button id="drawing-download-sets" class="drawing-btn-secondary">Download sets</button>
+    </div>
+
+    <div class="drawing-section drawing-simplify-section">
+      <h3 class="drawing-section-title">Slope allowance</h3>
+      <p class="drawing-hint">Merge consecutive segments when their X/Y slopes differ by at most this percent. Applies to text and freehand commands.</p>
+      <label class="drawing-simplify-row" for="drawing-slope-allowance">
+        <span class="drawing-toolbar-label">Allowance</span>
+        <input id="drawing-slope-allowance" type="number" value="5" min="0" max="100" step="0.1" />
+        <span class="drawing-jog-unit">%</span>
+      </label>
+      <div id="drawing-simplify-stats" class="drawing-simplify-stats">
+        <div>Without combining: 0 strokes, 0 points, 0 moves</div>
+        <div>With allowance: 0 strokes, 0 points, 0 moves</div>
+      </div>
     </div>
   </div>
 

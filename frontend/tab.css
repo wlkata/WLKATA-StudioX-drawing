@@ -345,6 +345,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
 }
 .drawing-jog-step-group {
   display: flex;
@@ -364,6 +365,33 @@
 .drawing-jog-step.active {
   background: var(--accent, #2196F3);
   color: #fff;
+}
+.drawing-jog-step-input {
+  width: 48px;
+  padding: 3px 4px;
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 4px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-primary, #333);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.drawing-jog-step-input::-webkit-outer-spin-button,
+.drawing-jog-step-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.drawing-jog-step-input:focus,
+.drawing-jog-step-input.custom-active {
+  border-color: var(--accent, #2196F3);
+}
+.drawing-jog-step:disabled,
+.drawing-jog-step-input:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .drawing-jog-unit {
   font-size: 10px;
@@ -401,6 +429,16 @@
   gap: 2px;
   min-width: 0;
   flex: 1;
+}
+.drawing-calib-pose {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.drawing-calib-pose .drawing-calib-value {
+  flex: 1;
+  min-width: 0;
 }
 .drawing-calib-label {
   font-size: 12px;
@@ -463,6 +501,40 @@
 .drawing-progress.running {
   color: var(--accent, #2196F3);
   font-weight: 600;
+}
+
+.drawing-simplify-section {
+  border-top: 1px solid var(--border-primary, #eee);
+  padding-top: 12px;
+  margin-top: auto;
+}
+.drawing-simplify-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.drawing-simplify-row input {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+}
+.drawing-simplify-row input:focus {
+  border-color: var(--accent, #2196F3);
+}
+.drawing-simplify-row input:disabled {
+  opacity: 0.45;
+}
+.drawing-simplify-stats {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+  line-height: 1.45;
 }
 
 /* ---- confirm modal ---- */
