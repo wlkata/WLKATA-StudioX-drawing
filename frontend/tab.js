@@ -1536,20 +1536,28 @@
   }
 
   function recordCalibPoint(key) {
-    ExtensionAPI.getRobotStatus(selectedPort).then(function (status) {
-      if (!status.success) {
-        ExtensionAPI.showNotification(status.error || 'Cannot read robot position', 'error');
+    if (!selectedPort) {
+      ExtensionAPI.showNotification('Select a robot first', 'error');
+      return;
+    }
+    // Cached pose from the reader. Does not send another ? to the arm.
+    fetch(ExtensionAPI.getServerUrl() + '/cmd/last-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: selectedPort })
+    }).then(function (r) { return r.json(); }).then(function (status) {
+      var coords = status && status.coordinates;
+      if (!status || !status.success || !coords) {
+        ExtensionAPI.showNotification((status && status.error) || 'No robot position yet', 'error');
         return;
       }
-      calib[key] = {
-        x: status.coordinates.X,
-        y: status.coordinates.Y,
-        z: status.coordinates.Z
-      };
+      calib[key] = { x: coords.X, y: coords.Y, z: coords.Z };
       ExtensionAPI.setData('drawing', 'calibration', calib);
       updateUI();
       renderCanvas();
       ExtensionAPI.showNotification(key.toUpperCase() + ' recorded: ' + fmtPos(calib[key]), 'info');
+    }).catch(function () {
+      ExtensionAPI.showNotification('Cannot read robot position', 'error');
     });
   }
 
