@@ -12,7 +12,7 @@ Image preparation uses a separate extension window. It requires the StudioX host
 
 1. Click **Upload image** in Drawing and choose one image in the file picker. Cancelling leaves the canvas unchanged.
 2. In the image window, click a function to append it to **Processing order**. The preview runs the entire list against the original image. Filters can appear more than once.
-3. Edit each step's parameters. Use the arrows to reorder steps and × to remove one. The preview updates automatically.
+3. Edit each step's parameters. Use the arrows to reorder steps and × to remove one. The preview updates automatically. Press and hold **Hold to preview** on any step to see the image after that step and all preceding steps, or **Hold original** to compare with the uploaded image. Release to restore the final result. These buttons also work by holding Space or Enter while focused. Intermediate inspection does not change the pipeline or which paths are added to the canvas.
 4. Finish with **Convert to paths**. It must be the last step. Adjust the foreground, contour mode, threshold, minimum area/length, and approximation to get suitable outlines. For edge images, use the nonzero foreground mode. Solid lines show pen-down paths; dashed blue lines show travel with the pen lifted. The processed image can be shown behind the paths.
 5. Click **Add to canvas**. This is available only after the latest pipeline successfully produces non-empty paths. Closing the window cancels preparation.
 6. Drag the added image to move it. Select it and drag any corner to resize while keeping its aspect ratio. Items stay inside the drawing area. Remove image deletes the selected item; Undo restores additions, movement, resizing, removal, and Clear.
@@ -49,4 +49,4 @@ python -B -m unittest discover -s tests -p 'test_*.py'
 node tests/test_image_stickers.js
 ```
 
-For the full Electron workflow, place this repository beside the StudioX `blockly` checkout and run its Electron binary with `tests/test_images.cjs`. `DRAWING_TEST_PYTHON` can override the fixture server's Python executable. The test uses a temporary profile, an image fixture, and simulated robot commands; it covers the file picker, separate processing window, filter edits/reordering, path validation, canvas operations, Undo, and calibrated playback. It does not require a connected arm.
+For the full Electron workflow, place this repository beside the StudioX `blockly` checkout and run its Electron binary with `tests/test_images.cjs`. `DRAWING_TEST_PYTHON` can override the fixture server's Python executable. The test uses a temporary profile, an image fixture, and simulated robot commands; it covers the file picker, separate processing window, filter edits/reordering, held step/original previews and delayed responses, path validation, canvas operations, Undo, and calibrated playback. It does not require a connected arm.

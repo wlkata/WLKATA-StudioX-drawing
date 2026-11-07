@@ -673,6 +673,15 @@ def image_process(token):
         return jsonify(success=False, error=str(exc)), 400
 
 
+@blueprint.route('/images/<token>/preview', methods=['POST'])
+def image_step_preview(token):
+    try:
+        data = request.get_json(silent=True) or {}
+        return jsonify(success=True, **_images.preview_steps(token, data.get('steps')))
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc)), 400
+
+
 @blueprint.route('/images/<token>/commit', methods=['POST'])
 def image_commit(token):
     try:

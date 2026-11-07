@@ -115,6 +115,8 @@
   }];
 
   let token = null, steps = [], generation = 0, timer, result = null, image = null, done = false, polling = false, committing = false;
+  let originalFrame = null, heldPreview = null;
+  const stepPreviews = new Map();
 
   async function request(path, body) {
     const response = await fetch(base + path, body === undefined ? undefined : {
@@ -141,22 +143,32 @@
   }
 
   function draw() {
-    const w = result?.width || image?.naturalWidth || 800, h = result?.height || image?.naturalHeight || 600;
+    const frame = heldPreview?.frame;
+    const frameReady = frame?.image.complete && frame.image.naturalWidth;
+    const displayed = frame?.data || result;
+    const picture = frame?.image || image;
+    const w = displayed?.width || picture?.naturalWidth || 800;
+    const h = displayed?.height || picture?.naturalHeight || 600;
+    canvas.style.opacity = heldPreview ? (frameReady ? '1' : '.4') : (result || !steps.length ? '1' : '.4');
+    $('preview-label').textContent = heldPreview
+      ? heldPreview.label + (heldPreview.error ? ' · ' + heldPreview.error : frameReady ? ' · ' + w + ' × ' + h : ' · Loading…')
+      : 'Final result';
+    $('preview-label').dataset.error = String(!!heldPreview?.error);
     const scale = 1000 / Math.max(w, h);
     canvas.width = Math.max(1, Math.round(w * scale));
     canvas.height = Math.max(1, Math.round(h * scale));
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (image?.complete && image.naturalWidth && (!result?.paths || $('show-source').checked))
-      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if (picture?.complete && picture.naturalWidth && (!displayed?.paths || $('show-source').checked))
+      ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
 
-    if (!result?.paths)
+    if (!displayed?.paths)
       return;
 
     let previous;
 
-    result.paths.forEach(path => {
+    displayed.paths.forEach(path => {
       if (previous && $('show-travel').checked) {
         ctx.setLineDash([5, 4]);
         ctx.strokeStyle = '#527fc0';
@@ -195,7 +207,93 @@
     current.src = url;
   }
 
+  function previewFrame(data) {
+    const picture = new Image();
+    picture.onload = draw;
+    picture.src = data.preview;
+    return {data, image: picture};
+  }
+
+  function releasePreview(button) {
+    if (!heldPreview || button && heldPreview.button !== button)
+      return;
+    heldPreview.button.setAttribute('aria-pressed', 'false');
+    heldPreview = null;
+    draw();
+  }
+
+  async function holdPreview(button, index) {
+    if (!token || committing || heldPreview?.button === button)
+      return;
+    releasePreview();
+    const selectedToken = token, revision = generation;
+    const held = {
+      button,
+      label: index < 0 ? 'Original image' : 'After step ' + (index + 1) + ': ' + tools.find(tool => tool.op === steps[index].op).label,
+      frame: index < 0 ? originalFrame : stepPreviews.get(index)
+    };
+    heldPreview = held;
+    button.setAttribute('aria-pressed', 'true');
+    draw();
+    if (index < 0 || held.frame)
+      return;
+    try {
+      const data = await request('/images/' + selectedToken + '/preview', {
+        steps: steps.slice(0, index + 1)
+      });
+      if (token !== selectedToken || generation !== revision)
+        return;
+      const frame = previewFrame(data);
+      stepPreviews.set(index, frame);
+      // Keep only a few decoded images; long pipelines may contain large frames.
+      if (stepPreviews.size > 6)
+        stepPreviews.delete(stepPreviews.keys().next().value);
+      if (heldPreview === held) {
+        held.frame = frame;
+        draw();
+      }
+    } catch (error) {
+      if (heldPreview === held) {
+        held.error = error.message;
+        draw();
+      }
+    }
+  }
+
+  function bindHoldPreview(button, index) {
+    button.type = 'button';
+    button.classList.add('image-hold-preview');
+    button.setAttribute('aria-pressed', 'false');
+    button.title = index < 0 ? 'Hold to preview the original image' : 'Hold to preview the image after this step';
+    button.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || button.disabled)
+        return;
+      event.preventDefault();
+      button.focus({preventScroll: true});
+      holdPreview(button, index);
+      button.setPointerCapture(event.pointerId);
+    });
+    const isPreviewKey = event => event.key === ' ' || event.key === 'Enter';
+    button.addEventListener('keydown', event => {
+      if (isPreviewKey(event)) {
+        event.preventDefault();
+        holdPreview(button, index);
+      }
+    });
+    button.addEventListener('keyup', event => {
+      if (isPreviewKey(event)) {
+        event.preventDefault();
+        releasePreview(button);
+      }
+    });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture', 'blur'])
+      button.addEventListener(name, () => releasePreview(button));
+    button.addEventListener('click', event => event.preventDefault());
+  }
+
   function invalidate() {
+    releasePreview();
+    stepPreviews.clear();
     generation++;
     result = null;
     $('add').disabled = true;
@@ -219,8 +317,8 @@
         return;
 
       result = data;
-      canvas.style.opacity = '1';
       loadPreview(data.preview);
+      draw();
       $('add').disabled = !data.canAdd;
       const count = data.paths?.reduce((n, path) => n + path.length, 0) || 0;
 
@@ -237,6 +335,7 @@
   }
 
   function list() {
+    releasePreview();
     const container = $('steps');
     container.replaceChildren();
 
@@ -275,6 +374,11 @@
       }
 
       li.appendChild(header);
+      const previewButton = document.createElement('button');
+      previewButton.className = 'image-step-preview';
+      previewButton.textContent = 'Hold to preview';
+      bindHoldPreview(previewButton, index);
+      li.appendChild(previewButton);
 
       tool.fields.forEach(spec => {
         const label = document.createElement('label');
@@ -376,13 +480,15 @@
       if (!data.token || data.token === token)
         return;
 
+      releasePreview();
+      stepPreviews.clear();
       clearTimeout(timer);
       token = data.token;
       steps = [];
       result = null;
       generation++;
       $('add').disabled = true;
-      canvas.style.opacity = '1';
+      $('original').disabled = false;
       $('source').textContent = data.name + ' · ' + data.width + ' × ' + data.height + (data.originalSize[0] !== data.width || data.originalSize[1] !== data.height ? ' (working image resized from ' + data.originalSize.join(' × ') + ')' : '');
       $('manual-functions').replaceChildren();
 
@@ -394,7 +500,9 @@
 
       document.querySelectorAll('#image-functions button').forEach(button => button.disabled = false);
       list();
-      loadPreview(data.preview);
+      originalFrame = previewFrame({...data, space: 'BGR', paths: null});
+      image = originalFrame.image;
+      draw();
       status('Choose image filters, then finish with Convert to paths.');
     } catch (error) {
       status(error.message, true);
@@ -407,11 +515,12 @@
     if (!result?.canAdd || committing)
       return;
 
+    releasePreview();
     $('add').disabled = true;
     committing = true;
 
     const controls = Array.from(document.querySelectorAll(
-      '#image-functions button, #image-steps button, #image-steps input, #image-steps select, #image-steps textarea'
+      '#image-original, #image-functions button, #image-steps button, #image-steps input, #image-steps select, #image-steps textarea'
     ));
 
     const disabled = controls.map(control => control.disabled);
@@ -433,6 +542,14 @@
 
   $('show-source').onchange = draw;
   $('show-travel').onchange = draw;
+  bindHoldPreview($('original'), -1);
+  window.addEventListener('blur', () => releasePreview());
+  window.addEventListener('pointerup', () => releasePreview());
+  window.addEventListener('pointercancel', () => releasePreview());
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden)
+      releasePreview();
+  });
 
   window.addEventListener('beforeunload', () => {
     if (token && !done)

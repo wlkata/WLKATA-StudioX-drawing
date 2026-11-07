@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import sys
 import tempfile
@@ -114,6 +115,59 @@ class ProcessingTests(unittest.TestCase):
         images.cancel(self.token)
         with self.assertRaises(ValueError):images.commit(self.token,current['revision'])
 
+    def test_intermediate_previews_leave_full_result_and_commit_unchanged(self):
+        final = images.process(self.token, self.steps())
+        ticket = images.session(self.token)['ticket']
+        original = images.preview_steps(self.token, [])
+        inverted = images.preview_steps(self.token, [{'op': 'invert'}])
+        decode = lambda result: cv2.imdecode(np.frombuffer(base64.b64decode(result['preview'].split(',')[1]), np.uint8), cv2.IMREAD_COLOR)
+        np.testing.assert_array_equal(decode(inverted), 255 - decode(original))
+        self.assertIsNone(inverted['paths'])
+        self.assertNotIn('revision', inverted)
+        self.assertNotIn('canAdd', inverted)
+        resized = images.preview_steps(self.token, [{'op': 'resize', 'params': {'width': 90, 'height': 60}}])
+        self.assertEqual((resized['width'], resized['height']), (90, 60))
+        path_preview = images.preview_steps(self.token, self.steps())
+        self.assertEqual(path_preview['paths'], final['paths'])
+        with self.assertRaises(ValueError):
+            images.preview_steps(self.token, [{'op': 'gaussian', 'params': {'size': 4}}])
+        self.assertEqual(images.session(self.token)['ticket'], ticket)
+        self.assertIs(images.session(self.token)['result'], final)
+        images.commit(self.token, final['revision'])
+        self.assertEqual(images.status(self.token)['sticker']['paths'], final['paths'])
+
+    def test_inspecting_valid_prefix_does_not_make_invalid_pipeline_addable(self):
+        with self.assertRaises(ValueError):
+            images.process(self.token, [{'op': 'contours'}, {'op': 'invert'}])
+        self.assertTrue(images.preview_steps(self.token, [{'op': 'contours'}])['paths'])
+        self.assertIsNone(images.session(self.token)['result'])
+        with self.assertRaises(ValueError):
+            images.commit(self.token, None)
+
+    def test_intermediate_request_does_not_supersede_running_full_pipeline(self):
+        start, release = threading.Event(), threading.Event()
+        results, errors = [], []
+        original = images.apply
+        def slow(image, space, step):
+            if step.get('op') == 'invert':
+                start.set(); release.wait(2)
+            return original(image, space, step)
+        def run():
+            try: results.append(images.process(self.token, [{'op': 'invert'}, {'op': 'contours'}]))
+            except Exception as exc: errors.append(exc)
+        with mock.patch.object(images, 'apply', side_effect=slow):
+            thread = threading.Thread(target=run)
+            thread.start()
+            try:
+                self.assertTrue(start.wait(2))
+                self.assertTrue(images.preview_steps(self.token, [{'op': 'color'}])['preview'])
+            finally:
+                release.set(); thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors)
+        self.assertTrue(results[0]['canAdd'])
+        self.assertIs(images.session(self.token)['result'], results[0])
+
     def test_http_routes_and_session_isolation(self):
         app=Flask(__name__);app.register_blueprint(backend.blueprint,url_prefix='/ext/drawing')
         client=app.test_client();base='/ext/drawing'
@@ -122,6 +176,10 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(client.post(base+'/images/'+self.token+'/commit',json={'revision':'bad'}).status_code,409)
         result=client.post(base+'/images/'+self.token+'/process',json={'steps':self.steps()}).json
         self.assertTrue(result['success'])
+        preview=client.post(base+'/images/'+self.token+'/preview',json={'steps':[{'op':'invert'}]})
+        self.assertEqual(preview.status_code,200)
+        self.assertNotIn('revision',preview.json)
+        self.assertEqual(client.post(base+'/images/'+self.token+'/preview',json={'steps':None}).status_code,400)
         self.assertEqual(client.post(base+'/images/'+self.token+'/commit',json={'revision':result['revision']}).status_code,200)
         self.assertEqual(client.get(base+'/images/'+self.token+'/status').json['status'],'accepted')
         self.assertEqual(client.get(base+'/images/not-a-session/status').status_code,404)

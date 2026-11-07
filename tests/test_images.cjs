@@ -42,6 +42,23 @@ async function wait(win, source) {
   throw Error("Timed out: " + source);
 }
 
+async function pressPreview(selector, key = ' ') {
+  await run(child, `var previewButton=document.querySelector(${JSON.stringify(selector)});previewButton.focus();previewButton.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(key)},bubbles:true}));`);
+}
+
+async function releasePreview(selector, key = ' ') {
+  await run(child, `document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new KeyboardEvent('keyup',{key:${JSON.stringify(key)},bubbles:true}));`);
+  await wait(child, "document.getElementById('image-preview-label').textContent==='Final result'");
+}
+
+async function waitForPreview(label) {
+  await wait(child, `document.getElementById('image-preview-label').textContent.includes(${JSON.stringify(label)}) && !document.getElementById('image-preview-label').textContent.includes('Loading') && document.getElementById('image-preview-label').dataset.error==='false'`);
+}
+
+function previewPixels() {
+  return run(child, "document.getElementById('image-preview').toDataURL()");
+}
+
 app.whenReady().then(async () => {
   try {
     server = spawn(
@@ -189,6 +206,11 @@ app.whenReady().then(async () => {
 
     await wait(child, "document.getElementById('image-status').dataset.error==='true'");
     assert.strictEqual(await run(child, "document.getElementById('image-add').disabled"), true);
+    await pressPreview('.image-step:nth-child(1) .image-step-preview');
+    await waitForPreview('After step 1: Convert color');
+    assert.strictEqual(await run(child, "document.getElementById('image-status').dataset.error"), 'true', 'inspecting an earlier step preserves the later pipeline error');
+    await releasePreview('.image-step:nth-child(1) .image-step-preview');
+    assert.strictEqual(await run(child, "document.getElementById('image-add').disabled"), true);
     await run(child, "kernel.value=3;kernel.dispatchEvent(new Event('input'))");
     await wait(child, "document.getElementById('image-status').dataset.error==='false'");
     const ids = await run(child, "Array.from(document.querySelectorAll('.image-step')).map(el=>el.dataset.stepId)");
@@ -231,6 +253,51 @@ app.whenReady().then(async () => {
     assert.strictEqual(await run(child, "document.getElementById('image-add').disabled"), true);
     await run(child, "document.querySelector('.image-terminal button[title=\"Move down\"]').click()");
     await wait(child, "!document.getElementById('image-add').disabled");
+    const finalPixels = await previewPixels();
+    await pressPreview('.image-step:nth-child(4) .image-step-preview');
+    await waitForPreview('After step 4: Manual OpenCV function');
+    assert.ok(await previewPixels() !== finalPixels, 'intermediate output differs from the final paths');
+    assert.strictEqual(await run(child, "document.getElementById('image-preview').getContext('2d').getImageData(0,0,1,1).data[0]"), 0, 'the intermediate invert produces a black background');
+    assert.strictEqual(await run(child, "document.getElementById('image-add').disabled"), false, 'inspecting a step preserves final path validity');
+    await child.webContents.capturePage().then(image => fs.writeFileSync('/private/tmp/studiox-drawing-step-preview.png', image.toPNG()));
+    await releasePreview('.image-step:nth-child(4) .image-step-preview');
+    assert.ok(await previewPixels() === finalPixels, 'release restores the final path preview');
+
+    await pressPreview('#image-original', 'Enter');
+    await waitForPreview('Original image · 160 × 120');
+    assert.ok(await previewPixels() !== finalPixels, 'original preview shows the unprocessed image');
+    await run(child, "window.dispatchEvent(new Event('blur'))");
+    await releasePreview('#image-original', 'Enter');
+    assert.ok(await previewPixels() === finalPixels, 'window blur restores the final result');
+
+    // Intermediate frames must use current parameters instead of an older cache.
+    for (const [width, height] of [[40, 30], [80, 60]]) {
+      await run(child, `for(const [key,value] of [['width',${width}],['height',${height}]]){const input=document.querySelector('.image-step:nth-child(3) [data-param='+key+']');input.value=value;input.dispatchEvent(new Event('input'));}`);
+      await pressPreview('.image-step:nth-child(3) .image-step-preview');
+      await waitForPreview('After step 3: Resize · ' + width + ' × ' + height);
+      await releasePreview('.image-step:nth-child(3) .image-step-preview');
+      await wait(child, "!document.getElementById('image-add').disabled");
+    }
+
+    const restoredFinal = await previewPixels();
+    await run(child, `window.originalPreviewFetch=window.fetch;window.delayedPreviewDone=false;window.fetch=(url,options)=>String(url).endsWith('/preview')?new Promise((resolve,reject)=>{window.releaseStepResponse=()=>originalPreviewFetch(url,options).then(resolve,reject).finally(()=>window.delayedPreviewDone=true);}):originalPreviewFetch(url,options);void 0;`);
+    await pressPreview('.image-step:nth-child(2) .image-step-preview');
+    await wait(child, "typeof window.releaseStepResponse==='function'");
+    await releasePreview('.image-step:nth-child(2) .image-step-preview');
+    await run(child, 'window.releaseStepResponse()');
+    await wait(child, 'window.delayedPreviewDone');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(await previewPixels() === restoredFinal, 'late intermediate responses cannot replace the restored final result');
+    await run(child, 'window.fetch=window.originalPreviewFetch;void 0');
+
+    const originalButton = await run(child, "(()=>{const r=document.getElementById('image-original').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()");
+    child.webContents.sendInputEvent({type:'mouseDown',...originalButton,button:'left',clickCount:1});
+    await waitForPreview('Original image');
+    child.webContents.sendInputEvent({type:'mouseMove',x:10,y:10});
+    child.webContents.sendInputEvent({type:'mouseUp',x:10,y:10,button:'left',clickCount:1});
+    await wait(child, "document.getElementById('image-preview-label').textContent==='Final result'");
+    assert.ok(await previewPixels() === restoredFinal, 'releasing outside the held button restores the final result');
+
     await child.webContents.capturePage().then(image => fs.writeFileSync("/private/tmp/studiox-drawing-image-window.png", image.toPNG()));
     assert.strictEqual(await run(parent, "commands.length"), 0, "preparing images must not touch hardware");
     await run(child, "document.getElementById('image-add').click()");
@@ -357,7 +424,7 @@ app.whenReady().then(async () => {
     assert.deepStrictEqual(errors, []);
 
     console.log(
-      "Drawing image UI passed: picker cancel/select, separate window, duplicate/reordered filters, editable/manual parameters, stale/error gating, final paths, sticker add/move/ratio resize/remove/clear/undo, and calibrated execution."
+      "Drawing image UI passed: picker cancel/select, separate window, duplicate/reordered filters, editable/manual parameters, stale/error gating, held step/original previews and release handling, final paths, sticker add/move/ratio resize/remove/clear/undo, and calibrated execution."
     );
   } catch (error) {
     console.error(error);

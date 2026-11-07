@@ -281,17 +281,14 @@ def contours(image, space, params):
     return paths
 
 
-def process(token, steps):
-    item = session(token)
-    with LOCK:
-        if item['status'] != 'editing': raise ValueError('This image session is already finished.')
-        item['ticket'] += 1; ticket = item['ticket']; item['result'] = None
+def _evaluate(item, steps, ticket=None):
+    """Evaluate a pipeline without changing the session's accepted result."""
     if not isinstance(steps, list) or len(steps) > 40:
         raise ValueError('Use at most 40 processing steps.')
     image, space, paths = item['image'].copy(), 'BGR', None
     for index, step in enumerate(steps):
         with LOCK:
-            if item['ticket'] != ticket or item['status'] != 'editing':
+            if item['status'] != 'editing' or ticket is not None and item['ticket'] != ticket:
                 raise ValueError('A newer image pipeline replaced this request.')
         try:
             if not isinstance(step, dict): raise ValueError('Invalid pipeline step.')
@@ -303,9 +300,26 @@ def process(token, steps):
                 check_image(image)
         except Exception as exc:
             raise ValueError(f'Step {index + 1}: {exc}') from exc
+    return {'width': image.shape[1], 'height': image.shape[0], 'space': space,
+            'preview': preview(image, space), 'paths': paths}
+
+
+def preview_steps(token, steps):
+    """Preview a prefix independently of full processing and commit validation."""
+    item = session(token)
+    with LOCK:
+        if item['status'] != 'editing': raise ValueError('This image session is already finished.')
+    return _evaluate(item, steps)
+
+
+def process(token, steps):
+    item = session(token)
+    with LOCK:
+        if item['status'] != 'editing': raise ValueError('This image session is already finished.')
+        item['ticket'] += 1; ticket = item['ticket']; item['result'] = None
+    result = _evaluate(item, steps, ticket)
     revision = hashlib.sha256((token + json.dumps(steps, sort_keys=True, allow_nan=False)).encode()).hexdigest()
-    result = {'revision': revision, 'width': image.shape[1], 'height': image.shape[0], 'space': space,
-              'preview': preview(image, space), 'paths': paths, 'canAdd': bool(paths), 'steps': steps}
+    result.update(revision=revision, canAdd=bool(result['paths']), steps=steps)
     with LOCK:
         if item['ticket'] != ticket or item['status'] != 'editing':
             raise ValueError('A newer image pipeline replaced this result.')

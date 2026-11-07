@@ -141,6 +141,43 @@ p {
   color: var(--muted);
 }
 
+.image-preview-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.image-preview-title h2 {
+  margin: 0;
+}
+
+.image-step-preview {
+  width: 100%;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.image-hold-preview {
+  touch-action: none;
+  user-select: none;
+}
+
+.image-hold-preview[aria-pressed=true] {
+  border-color: var(--accent);
+  background: color-mix(in srgb,var(--accent) 14%,var(--panel));
+}
+
+#image-preview-label {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+#image-preview-label[data-error=true] {
+  color: #c63232;
+}
+
 .image-preview-stage {
   position: relative;
   flex: 1;
