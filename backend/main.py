@@ -1,10 +1,11 @@
-"""Drawing extension backend: serve stroke medians from configured character folders."""
+"""Drawing backend: character strokes and image-to-path processing."""
 
 import json
 import os
 import re
 import zipfile
 from flask import Blueprint, jsonify, request
+import drawing_image_processing as _images
 
 blueprint = Blueprint("drawing", __name__)
 
@@ -634,3 +635,65 @@ def charsets_download():
         "include": _load_include(),
     })
 
+
+# Image processing is isolated from robot commands and character downloads.
+@blueprint.route('/images/upload', methods=['POST'])
+def image_upload():
+    try:
+        data = request.get_json(silent=True) or {}
+        return jsonify(success=True, **_images.upload(data.get('path')))
+    except (ValueError, OSError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
+
+
+@blueprint.route('/images/active')
+def image_active():
+    try:
+        token = _images.ACTIVE
+        if not token:
+            return jsonify(success=True, token=None)
+        item = _images.session(token)
+        if request.args.get('known') == token and item['status'] == 'editing':
+            return jsonify(success=True, token=token)
+        if item['status'] != 'editing':
+            return jsonify(success=True, token=None)
+        return jsonify(success=True, token=token, name=item['name'], originalSize=item['originalSize'],
+                       width=item['image'].shape[1], height=item['image'].shape[0],
+                       preview=_images.preview(item['image'], 'BGR'), manualFunctions=sorted(_images.MANUAL))
+    except ValueError:
+        return jsonify(success=True, token=None)
+
+
+@blueprint.route('/images/<token>/process', methods=['POST'])
+def image_process(token):
+    try:
+        data = request.get_json(silent=True) or {}
+        return jsonify(success=True, **_images.process(token, data.get('steps')))
+    except Exception as exc:
+        return jsonify(success=False, error=str(exc)), 400
+
+
+@blueprint.route('/images/<token>/commit', methods=['POST'])
+def image_commit(token):
+    try:
+        data = request.get_json(silent=True) or {}
+        return jsonify(_images.commit(token, data.get('revision')))
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 409
+
+
+@blueprint.route('/images/<token>/status')
+def image_status(token):
+    try:
+        return jsonify(success=True, **_images.status(token))
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 404
+
+
+@blueprint.route('/images/<token>/cancel', methods=['POST'])
+def image_cancel(token):
+    try:
+        _images.cancel(token)
+        return jsonify(success=True)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 404

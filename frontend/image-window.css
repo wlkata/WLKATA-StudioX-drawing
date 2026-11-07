@@ -1,0 +1,261 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f6f8;
+  --panel: #fff;
+  --ink: #20252d;
+  --muted: #596573;
+  --line: #d7dce2;
+  --accent: #2866cf;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 13px system-ui,sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+button,input,select,textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+button:hover:enabled {
+  background: color-mix(in srgb,var(--accent) 10%,var(--panel));
+}
+
+button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+input,select,textarea {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+textarea {
+  width: 100%;
+  min-height: 78px;
+  font-family: ui-monospace,monospace;
+  resize: vertical;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+
+p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 6px 0 12px;
+}
+
+.image-editor {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.image-editor header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  gap: 16px;
+}
+
+.image-editor header p {
+  margin-bottom: 0;
+}
+
+#image-add {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.image-editor main {
+  display: grid;
+  grid-template-columns: 175px minmax(220px,1fr) 280px;
+  gap: 14px;
+  padding: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.image-editor section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.image-tools button {
+  display: block;
+  text-align: left;
+  width: 100%;
+  margin: 0 0 7px;
+}
+
+.image-tools button[data-op=contours] {
+  border-color: var(--accent);
+  margin-top: 16px;
+}
+
+.image-preview {
+  display: flex;
+  flex-direction: column;
+}
+
+.image-preview-heading label {
+  display: block;
+  margin: 5px 0;
+  color: var(--muted);
+}
+
+.image-preview-stage {
+  position: relative;
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #e9edf2;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  margin: 10px 0;
+}
+
+#image-preview {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+#image-status[data-error=true] {
+  color: #c63232;
+}
+
+.image-hint {
+  font-size: 11px;
+}
+
+#image-steps {
+  padding: 0;
+  list-style: none;
+  margin: 0;
+}
+
+.image-step {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.image-step header {
+  padding: 0 0 8px;
+  gap: 4px;
+  align-items: start;
+  border: 0;
+}
+
+.image-step header strong {
+  flex: 1;
+  font-size: 12px;
+}
+
+.image-step header button {
+  padding: 2px 5px;
+}
+
+.image-param {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.image-param input[type=number] {
+  width: 90px;
+}
+
+.image-param input[type=text] {
+  width: 150px;
+}
+
+.image-param.stack {
+  display: block;
+}
+
+.image-param.stack textarea {
+  margin-top: 5px;
+}
+
+.image-terminal {
+  border-color: var(--accent);
+}
+
+.image-empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media(prefers-color-scheme:dark) {
+  :root {
+    --bg: #181b20;
+    --panel: #242930;
+    --ink: #ecf0f5;
+    --muted: #aeb9c6;
+    --line: #424b57;
+    --accent: #70a1ff;
+  }
+  .image-preview-stage {
+    background: #303741;
+  }
+}
+
+@media(max-width:800px) {
+  .image-editor main {
+    grid-template-columns: 145px minmax(150px,1fr) 230px;
+    gap: 8px;
+    padding: 8px;
+  }
+  .image-editor section {
+    padding: 9px;
+  }
+}

@@ -1,4 +1,21 @@
-(function () {
+(async function () {
+  var imageModuleURL = new URL('image-stickers.js', document.currentScript.src).href;
+  if (!window.DrawingImageStickers) {
+    try {
+      await new Promise(function (resolve, reject) {
+        var script = document.createElement('script');
+        script.src = imageModuleURL;
+        script.onload = resolve;
+        script.onerror = function () { reject(new Error('Could not load image tools.')); };
+        document.body.appendChild(script);
+      });
+    } catch (error) {
+      ExtensionAPI.showNotification(error.message, 'error');
+      return;
+    }
+  }
+  var imageModel = window.DrawingImageStickers;
+
   // ---- DOM refs ----------------------------------------------------------
 
   var canvas     = document.getElementById('drawing-canvas');
@@ -41,6 +58,14 @@
 
   // ---- State -------------------------------------------------------------
 
+  var imageItems = [];
+  var selectedImageId = null;
+  var imageLayer = document.getElementById('drawing-image-layer');
+  var uploadImageBtn = document.getElementById('drawing-upload-image');
+  var removeImageBtn = document.getElementById('drawing-remove-image');
+  var imagePoll = null;
+  var imageSession = null;
+  var imageDrag = null;
   var paths       = [];
   var currentPath = null;
   var isDrawing   = false;
@@ -184,8 +209,8 @@
       }
     }
     for (i = 0; i < undoStack.length; i++) {
-      for (j = 0; j < undoStack[i].length; j++) {
-        var snapPath = undoStack[i][j];
+      for (j = 0; j < undoStack[i].paths.length; j++) {
+        var snapPath = undoStack[i].paths[j];
         var k;
         for (k = 0; k < snapPath.length; k++) {
           snapPath[k] = mapPt(snapPath[k]);
@@ -198,6 +223,16 @@
       f.gy = Math.min(gi.maxGy, Math.max(0, f.gy * sy));
       f.size = clampSize(Math.max(1, Math.round(f.size * sx)), gi);
     }
+    function mapImages(items) {
+      items.forEach(function (item) {
+        item.gx *= sx;
+        item.gy *= sy;
+        item.width *= sx;
+        imageModel.fit(item, gi);
+      });
+    }
+    mapImages(imageItems);
+    undoStack.forEach(function (snapshot) { mapImages(snapshot.images); });
     lastGrid = { maxGx: gi.maxGx, maxGy: gi.maxGy };
 
     var sel = selectedField();
@@ -597,6 +632,7 @@
   }
 
   function selectTextField(id) {
+    if (id != null) selectedImageId = null;
     selectedTextId = id;
     var field = selectedField();
     if (field) {
@@ -1020,6 +1056,9 @@
 
     var allPaths = paths.slice();
     if (currentPath && currentPath.length > 0) allPaths.push(currentPath);
+    imageItems.forEach(function (item) {
+      imageModel.segments(item).forEach(function (segment) { allPaths.push(segment.points); });
+    });
 
     ctx.strokeStyle = '#333';
     ctx.lineWidth   = 2;
@@ -1049,6 +1088,7 @@
     drawEraseHover(gi);
     drawTextCaret(gi);
     syncTextOverlays();
+    syncImageOverlays(gi);
     updateTextError(layouts);
   }
 
@@ -1264,7 +1304,10 @@
   }
 
   function snapshotPaths() {
-    undoStack.push(clonePaths(paths));
+    undoStack.push({
+      paths: clonePaths(paths),
+      images: imageItems.map(function (item) { return Object.assign({}, item); })
+    });
     if (undoStack.length > 80) undoStack.shift();
   }
 
@@ -1316,6 +1359,7 @@
   canvas.addEventListener('mousedown', function (e) {
     if (executing) return;
     selectTextField(null);
+    selectedImageId = null;
     if (toolMode === 'erase') {
       erasePos = rawGridPos(e);
       eraseDragging = true;
@@ -1381,7 +1425,10 @@
 
   undoBtn.addEventListener('click', function () {
     if (!undoStack.length || executing) return;
-    paths = undoStack.pop();
+    var snapshot = undoStack.pop();
+    paths = snapshot.paths;
+    imageItems = snapshot.images;
+    selectedImageId = null;
     erasePos = eraseDragging ? erasePos : null;
     currentPath = null;
     isDrawing = false;
@@ -1391,7 +1438,9 @@
 
   clearBtn.addEventListener('click', function () {
     if (executing) return;
-    if (paths.length) snapshotPaths();
+    if (paths.length || imageItems.length) snapshotPaths();
+    imageItems = [];
+    selectedImageId = null;
     paths       = [];
     currentPath = null;
     if (!eraseDragging) erasePos = null;
@@ -1504,7 +1553,7 @@
     var gi = gridInfo();
     var layouts = layoutAll(gi);
     var hasText = textHasContent(layouts);
-    var hasDraw = paths.length > 0;
+    var hasDraw = paths.length > 0 || imageItems.length > 0;
     var textErr = textHasTypedChars() && textHasErrors(layouts);
     startBtn.disabled = !selectedPort || !isCalibrated || executing || (!hasDraw && !hasText) || textErr;
     if (moveCountEl && !executing) {
@@ -1513,6 +1562,8 @@
     }
     updateSimplifyStats();
     addTextBtn.disabled = executing;
+    uploadImageBtn.disabled = executing;
+    removeImageBtn.disabled = executing || !selectedImageId;
     if (downloadSetsBtn) downloadSetsBtn.disabled = executing;
     removeTextBtn.disabled = executing || selectedTextId == null;
     undoBtn.disabled = executing || undoStack.length === 0;
@@ -1769,6 +1820,7 @@
         });
       }
     }
+    imageItems.forEach(function (item) { segments = segments.concat(imageModel.segments(item)); });
     return segments;
   }
 
@@ -1778,7 +1830,7 @@
     var segments = [];
     var i, pts;
     for (i = 0; i < src.length; i++) {
-      pts = simplifyCollinear(src[i].points, pct);
+      pts = src[i].kind === 'image' ? src[i].points.slice() : simplifyCollinear(src[i].points, pct);
       if (pts.length > 0) {
         segments.push({ points: pts, label: src[i].label });
       }
@@ -1835,6 +1887,8 @@
     aborted   = false;
     startBtn.disabled = true;
     stopBtn.disabled  = false;
+    updateUI();
+    renderCanvas();
     addTextBtn.disabled = true;
     removeTextBtn.disabled = true;
     undoBtn.disabled = true;
@@ -1875,6 +1929,7 @@
     executing = false;
     stopBtn.disabled = true;
     updateUI();
+    renderCanvas();
 
     if (aborted) {
       setProgress('Stopped');
@@ -1897,7 +1952,7 @@
     if (!selectedPort || !isCalibrated) return;
     var gi = gridInfo();
     var layouts = layoutAll(gi);
-    if (!paths.length && !textHasContent(layouts)) return;
+    if (!paths.length && !imageItems.length && !textHasContent(layouts)) return;
     if (textHasTypedChars() && textHasErrors(layouts)) return;
     showModal();
   });
@@ -2030,5 +2085,219 @@
   document.getElementById('drawing-charset-refresh').addEventListener('click', loadCharsets);
   charsetModal.addEventListener('click', function (e) {
     if (e.target === charsetModal) charsetModal.hidden = true;
+  });
+
+  // Image preparation runs in its own registered extension window.
+  uploadImageBtn.addEventListener('click', async function() {
+    if (executing)
+      return;
+
+    uploadImageBtn.disabled = true;
+
+    try {
+      var ipc = require('electron').ipcRenderer;
+
+      var path = await ipc.invoke('dialog:openFile', {
+        title: 'Select an image to draw',
+
+        filters: [{
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'tif', 'tiff']
+        }]
+      });
+
+      if (!path)
+        return;
+
+      var response = await ExtensionAPI.fetch('drawing', '/images/upload', {
+        method: 'POST',
+
+        body: JSON.stringify({
+          path: path
+        })
+      });
+
+      if (!response.success)
+        throw new Error(response.error);
+
+      var opened = await ipc.invoke('extensions:openWindow', 'drawing');
+
+      if (!opened || !opened.success)
+        throw new Error('Could not open the image processing window.');
+
+      if (imagePoll)
+        clearInterval(imagePoll);
+
+      imageSession = response.token;
+      imagePoll = setInterval(pollImage, 600);
+      pollImage();
+    } catch (error) {
+      ExtensionAPI.showNotification(error.message, 'error');
+    } finally {
+      updateUI();
+    }
+  });
+
+  async function pollImage() {
+    if (!imageSession || executing)
+      return;
+
+    var token = imageSession;
+
+    try {
+      var result = await ExtensionAPI.fetch('drawing', '/images/' + token + '/status');
+
+      if (imageSession !== token)
+        return;
+
+      if (!result.success)
+        throw new Error(result.error);
+
+      if (result.status === 'accepted') {
+        var item = imageModel.create(result.sticker, gridInfo());
+        clearInterval(imagePoll);
+        imagePoll = null;
+        imageSession = null;
+        snapshotPaths();
+        imageItems.push(item);
+        selectTextField(null);
+        selectedImageId = item.id;
+        renderCanvas();
+        updateUI();
+      } else if (result.status === 'cancelled') {
+        clearInterval(imagePoll);
+        imagePoll = null;
+        imageSession = null;
+      }
+    } catch (error) {
+      clearInterval(imagePoll);
+      imagePoll = null;
+      imageSession = null;
+      ExtensionAPI.showNotification(error.message, 'error');
+    }
+  }
+
+  function syncImageOverlays(gi) {
+    var seen = new Set();
+
+    imageItems.forEach(function(item) {
+      seen.add(item.id);
+      var el = imageLayer.querySelector('[data-image-id="' + item.id + '"]');
+
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'drawing-image-item';
+        el.dataset.imageId = item.id;
+        el.title = item.name + ' — drag to move; drag a corner to resize';
+
+        ['nw', 'ne', 'sw', 'se'].forEach(function(corner) {
+          var handle = document.createElement('span');
+          handle.className = 'drawing-image-handle ' + corner;
+          handle.dataset.corner = corner;
+          handle.title = 'Resize (keeps ratio)';
+          el.appendChild(handle);
+        });
+
+        el.addEventListener('mousedown', function(event) {
+          if (executing || event.button !== 0)
+            return;
+
+          event.preventDefault();
+          event.stopPropagation();
+
+          // Undo replaces model objects while keeping their overlay elements.
+          var current = imageItems.find(function(candidate) {
+            return candidate.id === el.dataset.imageId;
+          });
+
+          if (!current)
+            return;
+
+          selectTextField(null);
+          selectedImageId = current.id;
+          var point = rawGridPos(event);
+
+          imageDrag = {
+            item: current,
+            original: Object.assign({}, current),
+            corner: event.target.dataset.corner,
+            start: point
+          };
+
+          document.addEventListener('mousemove', moveImage);
+          document.addEventListener('mouseup', endImage);
+          renderCanvas();
+          updateUI();
+        });
+
+        imageLayer.appendChild(el);
+      }
+
+      el.classList.toggle('selected', selectedImageId === item.id);
+      el.style.left = (gi.oX + item.gx * gi.cell) + 'px';
+      el.style.top = (gi.oY + item.gy * gi.cell) + 'px';
+      el.style.width = (item.width * gi.cell) + 'px';
+      el.style.height = (item.height * gi.cell) + 'px';
+      el.style.pointerEvents = executing || toolMode === 'erase' ? 'none' : 'auto';
+    });
+
+    imageLayer.querySelectorAll('.drawing-image-item').forEach(function(el) {
+      if (!seen.has(el.dataset.imageId))
+        el.remove();
+    });
+  }
+
+  function moveImage(event) {
+    if (!imageDrag || executing)
+      return;
+
+    var point = rawGridPos(event), drag = imageDrag;
+
+    if (!drag.snapshot) {
+      if (Math.abs(point.gx - drag.start.gx) + Math.abs(point.gy - drag.start.gy) < 1e-6)
+        return;
+
+      snapshotPaths();
+      drag.snapshot = true;
+    }
+
+    if (drag.corner)
+      imageModel.resize(drag.item, drag.original, drag.corner, point.gx, point.gy, gridInfo());
+    else imageModel.move(
+      drag.item,
+      drag.original.gx + point.gx - drag.start.gx,
+      drag.original.gy + point.gy - drag.start.gy,
+      gridInfo()
+    );
+
+    renderCanvas();
+    updateUI();
+  }
+
+  function endImage() {
+    imageDrag = null;
+    document.removeEventListener('mousemove', moveImage);
+    document.removeEventListener('mouseup', endImage);
+    updateUI();
+  }
+
+  removeImageBtn.addEventListener('click', function() {
+    if (executing || !selectedImageId)
+      return;
+
+    snapshotPaths();
+
+    imageItems = imageItems.filter(function(item) {
+      return item.id !== selectedImageId;
+    });
+
+    selectedImageId = null;
+    renderCanvas();
+    updateUI();
+  });
+
+  window.addEventListener('beforeunload', function() {
+    if (imagePoll)
+      clearInterval(imagePoll);
   });
 })();

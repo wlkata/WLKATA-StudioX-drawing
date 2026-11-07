@@ -2,7 +2,7 @@
   "name": "drawing",
   "displayName": "Drawing",
   "version": "1.0.0",
-  "description": "Draw freehand paths or Chinese characters and replay them with the robotic arm.",
+  "description": "Draw freehand, text, or processed image paths and replay them with a robotic arm.",
   "contributes": {
     "sidebarTab": {
       "id": "drawing",
@@ -14,6 +14,12 @@
     },
     "backend": {
       "main": "backend/main.py"
+    },
+    "window": {
+      "title": "Drawing \u00b7 Image processing",
+      "html": "frontend/image-window.html",
+      "js": "frontend/image-window.js",
+      "css": "frontend/image-window.css"
     }
   }
 }

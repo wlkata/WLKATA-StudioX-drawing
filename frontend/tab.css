@@ -640,3 +640,63 @@
   justify-content: flex-end;
   gap: 8px;
 }
+/* Imported vectors are selectable objects; their paths are rendered on canvas. */
+.drawing-image-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.drawing-image-item {
+  position: absolute;
+  pointer-events: auto;
+  border: 1px dashed rgba(40,102,207,.55);
+  border-radius: 3px;
+  cursor: move;
+  box-sizing: border-box;
+  touch-action: none;
+}
+
+.drawing-image-item.selected {
+  border: 2px solid var(--accent,#2866cf);
+  background: rgba(40,102,207,.035);
+}
+
+.drawing-image-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #fff;
+  background: var(--accent,#2866cf);
+  border-radius: 2px;
+  display: none;
+}
+
+.selected>.drawing-image-handle {
+  display: block;
+}
+
+.drawing-image-handle.nw {
+  left: -5px;
+  top: -5px;
+  cursor: nwse-resize;
+}
+
+.drawing-image-handle.ne {
+  right: -5px;
+  top: -5px;
+  cursor: nesw-resize;
+}
+
+.drawing-image-handle.sw {
+  left: -5px;
+  bottom: -5px;
+  cursor: nesw-resize;
+}
+
+.drawing-image-handle.se {
+  right: -5px;
+  bottom: -5px;
+  cursor: nwse-resize;
+}
