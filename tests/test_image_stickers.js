@@ -47,6 +47,26 @@ assert.strictEqual(path.points[0].gx, item.gx);
 assert.strictEqual(path.points[2].gy, item.gy + item.height);
 assert.strictEqual(JSON.stringify(payload.paths), unchanged, "normalised paths stay immutable");
 
+// A full-height image in the bottom-right corner, rescaled through grids that clamp it,
+// ends up where a direct rescale puts it, and a round trip restores it.
+const tall = model.create({ ...payload, aspect: .5 }, grid);
+model.move(tall, 1000, 1000, grid);
+model.resize(tall, { ...tall }, "nw", -100, -100, grid);
+const placement = it => [it.gx, it.gy, it.width, it.height].map(n => Math.round(n * 1e9) / 1e9);
+const start = placement(tall);
+assert.deepStrictEqual(start, [35, 0, 15, 30]);
+const stepped = { ...tall };
+
+for (const [sx, sy, maxGx, maxGy] of [[.2, 7 / 30, 10, 7], [1.5, 8 / 7, 15, 8], [10, 90 / 8, 150, 90]])
+  model.rescale(stepped, sx, sy, { maxGx, maxGy });
+
+assert.deepStrictEqual(placement(stepped), placement(model.rescale({ ...tall }, 3, 3, { maxGx: 150, maxGy: 90 })),
+  "clamping at an intermediate resolution is not carried over");
+model.rescale(stepped, 1 / 3, 1 / 3, grid);
+assert.deepStrictEqual(placement(stepped), start, "a resolution round trip restores the placement");
+model.move(stepped, 0, 0, grid);
+assert.ok(!("unclamped" in stepped), "moving starts a new placement");
+
 assert.throws(() => model.create({
   ...payload,
   paths: [[[0, 0], [Infinity, 0]]]
@@ -58,5 +78,5 @@ assert.throws(() => model.create({
 }, grid));
 
 console.log(
-  "Image sticker geometry passed: bounds, four anchored corners, aspect ratio, execution coordinates, and immutable vectors."
+  "Image sticker geometry passed: bounds, four anchored corners, aspect ratio, execution coordinates, rescaling, and immutable vectors."
 );

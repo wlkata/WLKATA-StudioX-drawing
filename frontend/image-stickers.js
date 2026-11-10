@@ -42,6 +42,7 @@
   }
 
   function move(item, x, y, grid) {
+    delete item.unclamped;
     item.gx = x;
     item.gy = y;
     return fit(item, grid);
@@ -54,10 +55,21 @@
     const requested = ((x - ax) * sx + (y - ay) * sy / original.aspect) / (1 + 1 / (original.aspect * original.aspect));
     const maximum = Math.min(west ? ax : grid.maxGx - ax, (north ? ay : grid.maxGy - ay) * original.aspect);
     const width = clamp(requested, Math.min(.5, maximum), maximum);
+    delete item.unclamped;
     item.width = width;
     item.height = width / original.aspect;
     item.gx = west ? ax - width : ax;
     item.gy = north ? ay - item.height : ay;
+    return fit(item, grid);
+  }
+
+  // Scale an item onto a new grid (sx, sy: new cells per old cell). The
+  // unclamped placement is kept between calls, so clamping at one resolution
+  // does not carry over to the next. move and resize start a new placement.
+  function rescale(item, sx, sy, grid) {
+    const base = item.unclamped || item;
+    item.unclamped = { gx: base.gx * sx, gy: base.gy * sy, width: base.width * sx };
+    Object.assign(item, item.unclamped);
     return fit(item, grid);
   }
 
@@ -78,6 +90,7 @@
     fit,
     move,
     resize,
+    rescale,
     segments
   };
 

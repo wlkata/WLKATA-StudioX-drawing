@@ -20,7 +20,6 @@
 
   var canvas     = document.getElementById('drawing-canvas');
   var ctx        = canvas.getContext('2d');
-  var canvasWrap = document.getElementById('drawing-canvas-wrap');
   var textLayer  = document.getElementById('drawing-text-layer');
   var resInput   = document.getElementById('drawing-resolution');
   var undoBtn    = document.getElementById('drawing-undo');
@@ -130,15 +129,22 @@
 
   // ---- Canvas sizing -----------------------------------------------------
 
+  // Match the backing store to the canvas's displayed size. StudioX hides
+  // inactive tabs with display:none, where the canvas measures 0x0; resizing
+  // to that would erase the drawing, so keep the current size while hidden.
+  // The observer fires again when the tab is shown, which redraws it.
   function resizeCanvas() {
-    var rect = canvasWrap.getBoundingClientRect();
-    canvas.width  = Math.round(rect.width);
-    canvas.height = Math.round(rect.height);
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    if (!w || !h) return;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width  = w;
+      canvas.height = h;
+    }
     renderCanvas();
   }
 
-  window.addEventListener('resize', resizeCanvas);
-  setTimeout(resizeCanvas, 0);
+  new ResizeObserver(resizeCanvas).observe(canvas);
 
   // ---- Grid helpers -------------------------------------------------------
 
@@ -155,10 +161,12 @@
     return w / h;
   }
 
+  var MAX_RESOLUTION = 200;
+
   function gridInfo() {
     var res = parseInt(resInput.value, 10) || 50;
     if (res < 10) res = 10;
-    if (res > 80) res = 80;
+    if (res > MAX_RESOLUTION) res = MAX_RESOLUTION;
     var w = canvas.width;
     var h = canvas.height;
     var aspect = paperAspect();
@@ -221,26 +229,24 @@
       f = textFields[i];
       f.gx = Math.min(gi.maxGx, Math.max(0, f.gx * sx));
       f.gy = Math.min(gi.maxGy, Math.max(0, f.gy * sy));
-      f.size = clampSize(Math.max(1, Math.round(f.size * sx)), gi);
+      // Keep the exact scaled size; clampSize rounds it where it is used, so
+      // repeated resolution changes do not accumulate rounding error.
+      f.size *= sx;
     }
     function mapImages(items) {
-      items.forEach(function (item) {
-        item.gx *= sx;
-        item.gy *= sy;
-        item.width *= sx;
-        imageModel.fit(item, gi);
-      });
+      items.forEach(function (item) { imageModel.rescale(item, sx, sy, gi); });
     }
     mapImages(imageItems);
     undoStack.forEach(function (snapshot) { mapImages(snapshot.images); });
     lastGrid = { maxGx: gi.maxGx, maxGy: gi.maxGy };
 
     var sel = selectedField();
-    if (sel && !sizeInput.disabled) sizeInput.value = String(sel.size);
+    if (sel && !sizeInput.disabled) sizeInput.value = String(clampSize(sel.size, gi));
   }
 
   function clampSize(n, gi) {
-    n = parseInt(n, 10) || 10;
+    n = Math.round(parseFloat(n));
+    if (isNaN(n)) n = 10;
     if (n < 1) n = 1;
     var cap = Math.max(1, Math.min(gi.maxGx, gi.maxGy));
     if (n > cap) n = cap;
@@ -1169,7 +1175,7 @@
   function clampResolutionInput() {
     var n = parseInt(resInput.value, 10);
     if (!isFinite(n) || n < 10) n = 10;
-    if (n > 80) n = 80;
+    if (n > MAX_RESOLUTION) n = MAX_RESOLUTION;
     if (String(n) !== resInput.value) resInput.value = n;
   }
 
@@ -1181,7 +1187,7 @@
   resInput.addEventListener('blur', clampResolutionInput);
   resInput.addEventListener('input', function () {
     var n = parseInt(resInput.value, 10);
-    if (isFinite(n) && n > 80) clampResolutionInput();
+    if (isFinite(n) && n > MAX_RESOLUTION) clampResolutionInput();
     renderCanvas();
     updateUI();
   });
